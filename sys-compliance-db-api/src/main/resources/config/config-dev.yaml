@@ -1,0 +1,28 @@
+# sys-compliance-db-api - DEV (CloudHub 2.0, Sandbox)
+http:
+  port: "8081"       # CloudHub always routes to 8081
+
+api:
+  id: "REPLACE_WITH_API_MANAGER_INSTANCE_ID"
+
+db:
+  host: "gateway01.ap-southeast-1.prod.aws.tidbcloud.com"
+  port: "4000"
+  name: "compliance"
+  sslMode: "VERIFY_IDENTITY"
+  fetchSize: "500"
+  pool:
+    max: "5"
+  reconnect:
+    frequencyMs: "2000"
+    attempts: "3"
+
+flags:
+  pageSize: "500"
+
+report:
+  defaultType: "STR"
+  defaultEntity: "ENT0091"
+  missingCustomer:
+    name: "UNKNOWN_CUSTOMER"
+    type: "UNKNOWN"

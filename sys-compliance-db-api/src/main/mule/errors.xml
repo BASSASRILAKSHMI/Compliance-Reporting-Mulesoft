@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!--
+      Global error handler. Every error leaves this API as
+        { errorCode, message, correlationId }  with a meaningful HTTP status.
+      Custom error types raised by the implementation flows:
+        APP:NOT_FOUND 404 · APP:BAD_REQUEST 400 · APP:CONFLICT 409
+    -->
+    <error-handler name="global-error-handler" doc:name="Global error handler">
+
+        <!-- ===== APIkit validation / routing ===== -->
+        <on-error-propagate type="APIKIT:BAD_REQUEST" doc:name="400 bad request">
+            <set-variable variableName="httpStatus" value="400" doc:name="Status 400" />
+            <set-variable variableName="errorCode" value="BAD_REQUEST" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="APIKIT:NOT_FOUND" doc:name="404 resource">
+            <set-variable variableName="httpStatus" value="404" doc:name="Status 404" />
+            <set-variable variableName="errorCode" value="RESOURCE_NOT_FOUND" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED" doc:name="405">
+            <set-variable variableName="httpStatus" value="405" doc:name="Status 405" />
+            <set-variable variableName="errorCode" value="METHOD_NOT_ALLOWED" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="APIKIT:NOT_ACCEPTABLE" doc:name="406">
+            <set-variable variableName="httpStatus" value="406" doc:name="Status 406" />
+            <set-variable variableName="errorCode" value="NOT_ACCEPTABLE" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="APIKIT:UNSUPPORTED_MEDIA_TYPE" doc:name="415">
+            <set-variable variableName="httpStatus" value="415" doc:name="Status 415" />
+            <set-variable variableName="errorCode" value="UNSUPPORTED_MEDIA_TYPE" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="APIKIT:NOT_IMPLEMENTED" doc:name="501">
+            <set-variable variableName="httpStatus" value="501" doc:name="Status 501" />
+            <set-variable variableName="errorCode" value="NOT_IMPLEMENTED" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+
+        <!-- ===== Business errors raised by the implementation ===== -->
+        <on-error-propagate type="APP:NOT_FOUND" doc:name="404 not found">
+            <set-variable variableName="httpStatus" value="404" doc:name="Status 404" />
+            <set-variable variableName="errorCode" value="NOT_FOUND" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="APP:BAD_REQUEST" doc:name="400 business">
+            <set-variable variableName="httpStatus" value="400" doc:name="Status 400" />
+            <set-variable variableName="errorCode" value="#[vars.appErrorCode default 'BAD_REQUEST']" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="APP:CONFLICT" doc:name="409 conflict">
+            <set-variable variableName="httpStatus" value="409" doc:name="Status 409" />
+            <set-variable variableName="errorCode" value="#[vars.appErrorCode default 'CONFLICT']" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+
+        <!-- ===== Database ===== -->
+        <on-error-propagate type="DB:CONNECTIVITY, RETRY_EXHAUSTED" doc:name="503 DB down">
+            <set-variable variableName="httpStatus" value="503" doc:name="Status 503" />
+            <set-variable variableName="errorCode" value="DB_UNAVAILABLE" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <!-- a unique-key violation (duplicate run / sequence / archive) is a 409, not a 500 -->
+        <on-error-propagate type="DB:QUERY_EXECUTION"
+            when="#[(error.description default '') contains 'Duplicate entry']" doc:name="409 duplicate">
+            <set-variable variableName="httpStatus" value="409" doc:name="Status 409" />
+            <set-variable variableName="errorCode" value="DUPLICATE" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+        <on-error-propagate type="DB:QUERY_EXECUTION, DB:BAD_SQL_SYNTAX" doc:name="500 DB query">
+            <set-variable variableName="httpStatus" value="500" doc:name="Status 500" />
+            <set-variable variableName="errorCode" value="DB_QUERY_FAILED" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+
+        <!-- ===== Anything else ===== -->
+        <on-error-propagate type="ANY" doc:name="500 unexpected">
+            <set-variable variableName="httpStatus" value="500" doc:name="Status 500" />
+            <set-variable variableName="errorCode" value="INTERNAL_ERROR" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
+    </error-handler>
+
+    <sub-flow name="build-error-response" doc:name="build-error-response">
+        <logger level="ERROR" category="com.cbit.compliance.sys.db" doc:name="Log error"
+            message="#[output application/json --- {
+                event: 'ERROR', correlationId: correlationId, status: vars.httpStatus,
+                errorCode: vars.errorCode, errorType: (error.errorType.namespace default '') ++ ':' ++ (error.errorType.identifier default ''),
+                description: error.description }]" />
+        <ee:transform doc:name="Error body">
+            <ee:message>
+                <ee:set-payload resource="dwl/error-response.dwl" />
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>

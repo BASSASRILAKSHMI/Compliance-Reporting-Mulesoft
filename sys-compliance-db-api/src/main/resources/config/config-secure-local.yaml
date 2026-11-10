@@ -1,0 +1,8 @@
+# Encrypted with the Mule Secure Properties Tool (AES / CBC).
+# Replace each REPLACE_ME with the tool output, keeping the ![...] wrapper:
+#   java -cp secure-properties-tool.jar com.mulesoft.tools.SecurePropertiesTool \
+#        string encrypt AES CBC <16-char-key> "<plain value>"
+# The key itself is never committed.
+db:
+  user: "![vxY+lc3cZyfcQ6pX0GEXNGUAb4FzH3Wvxs/4BEIMFYA=]"
+  password: "![eHEXgCHSYLqBCI1BidnQMeo3gnGudAa1T6ziiXZyMeU=]"

@@ -1,0 +1,473 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="sys-compliance-db-api-test-suite.xml" />
+
+    <!-- ========================= health ========================= -->
+    <munit:test name="health-returns-up" description="DB reachable -> UP">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="SELECT 1" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{ok: 1}]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="impl-health" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.database]" is="#[MunitTools::equalTo('UP')]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ========================= control ========================= -->
+    <munit:test name="control-found" description="Bookmark is returned in camelCase">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Select bookmark" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java"
+                        value="#[[{report_type: 'STR', entity_code: 'ENT0091', last_reported_upto: '2026-11-04 21:00:00', last_successful_run: null, last_sequence_number: 0, updated_at: '2026-11-09 21:40:12'}]]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{uriParams: {reportType: 'STR', entityCode: 'ENT0091'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-control" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.lastReportedUpto]" is="#[MunitTools::equalTo('2026-11-04 21:00:00')]" />
+            <munit-tools:assert-that expression="#[payload.lastSequenceNumber]" is="#[MunitTools::equalTo(0)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="control-not-found" description="Unknown report -> APP:NOT_FOUND" expectedErrorType="APP:NOT_FOUND">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Select bookmark" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{uriParams: {reportType: 'CTR', entityCode: 'ENT0091'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-control" />
+        </munit:execution>
+    </munit:test>
+
+    <!-- ========================= flag page ========================= -->
+    <munit:test name="flag-page-has-more-and-cursor" description="limit+1 rows -> hasMore, cursor = last returned row, placeholder customer flagged">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Select flag page" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java" value="#[[
+  {flag_seq: 1, transaction_id: 'TXN-1', transaction_datetime: '2026-11-05 14:22:07', account_number: '00214578', customer_id: 'CUST-77219', customer_name: 'Meena Raghavan', customer_type: 'INDIVIDUAL', customer_missing: 0, transaction_type: 'CARD_PAYMENT', channel: 'ONLINE', currency: 'INR', amount: 248500.00, counterparty_name: 'Global Gadgets Online', counterparty_country: 'SG', flag_code: 'FLG-HIGH-VALUE', flag_reason: 'r', flagged_at: '2026-11-05 14:22:09', reviewed_by: 'RISK_ANALYST_04', review_status: 'CONFIRMED'},
+  {flag_seq: 2, transaction_id: 'TXN-2', transaction_datetime: '2026-11-05 16:40:55', account_number: '00219004', customer_id: 'CUST-99999', customer_name: 'UNKNOWN_CUSTOMER', customer_type: 'UNKNOWN', customer_missing: 1, transaction_type: 'WIRE_TRANSFER', channel: 'BRANCH', currency: 'INR', amount: 1150000.00, counterparty_name: 'Orient Trading FZE', counterparty_country: 'AE', flag_code: 'FLG-CROSS-BORDER', flag_reason: 'r', flagged_at: '2026-11-05 16:41:02', reviewed_by: 'RISK_ANALYST_02', review_status: 'CONFIRMED'},
+  {flag_seq: 3, transaction_id: 'TXN-3', transaction_datetime: '2026-11-05 18:05:12', account_number: '00221876', customer_id: 'CUST-66207', customer_name: 'Sunrise Exports Pvt Ltd', customer_type: 'CORPORATE', customer_missing: 0, transaction_type: 'CASH_DEPOSIT', channel: 'BRANCH', currency: 'INR', amount: 980000.00, counterparty_name: 'Self', counterparty_country: 'IN', flag_code: 'FLG-STRUCTURING', flag_reason: 'r', flagged_at: '2026-11-05 18:05:20', reviewed_by: 'RISK_ANALYST_07', review_status: 'CONFIRMED'}
+]]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{queryParams: {periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00', limit: '2'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-flag-page" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.count]" is="#[MunitTools::equalTo(2)]" />
+            <munit-tools:assert-that expression="#[payload.hasMore]" is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that expression="#[payload.nextCursor.afterTransactionId]" is="#[MunitTools::equalTo('TXN-2')]" />
+            <munit-tools:assert-that expression="#[payload.records[1].customerMissing]" is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that expression="#[payload.records[0].flaggedAt]" is="#[MunitTools::equalTo('2026-11-05T14:22:09+05:30')]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="flag-page-last-page" description="fewer rows than limit -> no cursor">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Select flag page" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{queryParams: {periodStart: '2026-11-05 21:00:00', periodEnd: '2026-11-06 21:00:00'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-flag-page" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.count]" is="#[MunitTools::equalTo(0)]" />
+            <munit-tools:assert-that expression="#[payload.hasMore]" is="#[MunitTools::equalTo(false)]" />
+            <munit-tools:assert-that expression="#[payload.nextCursor]" is="#[MunitTools::nullValue()]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ========================= summary ========================= -->
+    <munit:test name="flag-summary-totals-and-breakdown" description="Aggregate + per-flag breakdown">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Aggregate totals" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java"
+                        value="#[[{record_count: 3, total_amount: 2378500.00, customer_count: 3, pending_count: 3}]]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Breakdown by flag code" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java"
+                        value="#[[{flag_code: 'FLG-CROSS-BORDER', cnt: 1, amount: 1150000.00}, {flag_code: 'FLG-HIGH-VALUE', cnt: 1, amount: 248500.00}, {flag_code: 'FLG-STRUCTURING', cnt: 1, amount: 980000.00}]]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{queryParams: {periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-flag-summary" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.recordCount]" is="#[MunitTools::equalTo(3)]" />
+            <munit-tools:assert-that expression="#[payload.totalAmount]" is="#[MunitTools::equalTo(2378500.00)]" />
+            <munit-tools:assert-that expression="#[sizeOf(payload.byFlag)]" is="#[MunitTools::equalTo(3)]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ========================= late flags ========================= -->
+    <munit:test name="late-flags-listed" description="Pending flags before the bookmark are returned">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Pending flags before bookmark" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java"
+                        value="#[[{flag_seq: 23, transaction_id: 'TXN-99121500', flag_code: 'FLG-CROSS-BORDER', flagged_at: '2026-11-05 19:45:30', amount: 1475000.00}]]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{queryParams: {}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-late-flags" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload[0].transactionId]" is="#[MunitTools::equalTo('TXN-99121500')]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ========================= runs ========================= -->
+    <munit:test name="patch-run-rejects-success" description="SUCCESS only via finalize" expectedErrorType="APP:BAD_REQUEST">
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value="#[{runStatus: 'SUCCESS'}]" mediaType="application/json" />
+                <munit:attributes value="#[{uriParams: {runId: 'RUN-1'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-update-run" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="patch-run-unknown-run" description="0 rows updated -> APP:NOT_FOUND" expectedErrorType="APP:NOT_FOUND">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Update run" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 0}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload value="#[{recordCount: 3, runStatus: 'FAILED'}]" mediaType="application/java" />
+                <munit:attributes value="#[{uriParams: {runId: 'RUN-X'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-update-run" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="next-sequence" description="Second report for a period gets sequence 2">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Max issued sequence" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{next_sequence: 2, issued_count: 1}]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{queryParams: {periodStart: '2026-11-04 21:00:00'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-next-sequence" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.nextSequence]" is="#[MunitTools::equalTo(2)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="chain-head-genesis" description="No issued runs -> GENESIS">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Chain head" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{queryParams: {}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-chain-head" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.chainHash]" is="#[MunitTools::equalTo('GENESIS')]" />
+        </munit:validation>
+    </munit:test>
+
+    <!-- ========================= finalize ========================= -->
+    <munit:test name="finalize-happy-path" description="Flags marked, run SUCCESS, bookmark advanced">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Flags -&gt; REPORTED" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 3}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Run -&gt; SUCCESS" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 1}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Advance control" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 1}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Read bookmark" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{last_reported_upto: '2026-11-05 21:00:00'}]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload mediaType="application/java" value="#[{
+                    runId: 'RUN-1', reportType: 'STR', entityCode: 'ENT0091',
+                    periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00',
+                    sequenceNumber: 1, flagMode: 'PENDING', expectedFlagUpdates: 3, advanceControl: true }]" />
+            </munit:set-event>
+            <flow-ref name="impl-finalize-report" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.flagsUpdated]" is="#[MunitTools::equalTo(3)]" />
+            <munit-tools:assert-that expression="#[payload.lastReportedUpto]" is="#[MunitTools::equalTo('2026-11-05 21:00:00')]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="finalize-flag-count-changed-rolls-back" description="A flag arrived after extraction -> conflict, bookmark never touched"
+        expectedErrorType="APP:CONFLICT">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Flags -&gt; REPORTED" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 4}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload mediaType="application/java" value="#[{
+                    runId: 'RUN-1', reportType: 'STR', entityCode: 'ENT0091',
+                    periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00',
+                    sequenceNumber: 1, flagMode: 'PENDING', expectedFlagUpdates: 3, advanceControl: true }]" />
+            </munit:set-event>
+            <flow-ref name="impl-finalize-report" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="finalize-control-conflict" description="Bookmark already moved by another run -> conflict"
+        expectedErrorType="APP:CONFLICT">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Flags -&gt; REPORTED" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 0}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Run -&gt; SUCCESS" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 1}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:update">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Advance control" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 0}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload mediaType="application/java" value="#[{
+                    runId: 'RUN-2', reportType: 'STR', entityCode: 'ENT0091',
+                    periodStart: '2026-11-05 21:00:00', periodEnd: '2026-11-06 21:00:00',
+                    sequenceNumber: 1, flagMode: 'PENDING', expectedFlagUpdates: 0, advanceControl: true }]" />
+            </munit:set-event>
+            <flow-ref name="impl-finalize-report" />
+        </munit:execution>
+    </munit:test>
+
+    <!-- ========================= archive ========================= -->
+    <!-- "Hello" = SGVsbG8= ; SHA-256 = 185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969 -->
+    <munit:test name="archive-stores-new-file" description="Checksum verified, chunk inserted, 201">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Already archived?" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{cnt: 0}]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="db:insert">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Insert chunk" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{affectedRows: 1}]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload mediaType="application/java" value="#[{
+                    runId: 'RUN-1', fileType: 'SUBMISSION', fileName: 'ENT0091_STR_20261105_001.csv',
+                    checksum: '185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969',
+                    contentBase64: 'SGVsbG8=' }]" />
+            </munit:set-event>
+            <flow-ref name="impl-archive-file" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.httpStatus]" is="#[MunitTools::equalTo('201')]" />
+            <munit-tools:assert-that expression="#[payload.fileSize]" is="#[MunitTools::equalTo(5)]" />
+            <munit-tools:verify-call processor="db:insert" times="1">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Insert chunk" />
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="archive-rejects-checksum-mismatch" description="Corrupted upload never stored" expectedErrorType="APP:BAD_REQUEST">
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload mediaType="application/java" value="#[{
+                    runId: 'RUN-1', fileType: 'SUBMISSION', fileName: 'x.csv',
+                    checksum: '0000000000000000000000000000000000000000000000000000000000000000',
+                    contentBase64: 'SGVsbG8=' }]" />
+            </munit:set-event>
+            <flow-ref name="impl-archive-file" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="archive-rejects-overwrite" description="NS 6 - existing archive can never be overwritten" expectedErrorType="APP:CONFLICT">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Already archived?" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{cnt: 1}]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:payload mediaType="application/java" value="#[{
+                    runId: 'RUN-1', fileType: 'SUBMISSION', fileName: 'ENT0091_STR_20261105_001.csv',
+                    checksum: '185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969',
+                    contentBase64: 'SGVsbG8=' }]" />
+            </munit:set-event>
+            <flow-ref name="impl-archive-file" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="archive-content-not-found" description="Unknown run/file -> APP:NOT_FOUND" expectedErrorType="APP:NOT_FOUND">
+        <munit:behavior>
+            <munit-tools:mock-when processor="db:select">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Select chunks" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event>
+                <munit:attributes value="#[{uriParams: {runId: 'NOPE', fileType: 'SUBMISSION'}}]" />
+            </munit:set-event>
+            <flow-ref name="impl-get-archive-content" />
+        </munit:execution>
+    </munit:test>
+</mule>

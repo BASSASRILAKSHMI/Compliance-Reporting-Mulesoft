@@ -1,0 +1,5 @@
+# MUnit only. Values without the ![...] wrapper are read as plain text by the
+# secure-properties module, so no key-specific encryption is needed for tests.
+db:
+  user: "munit"
+  password: "munit"

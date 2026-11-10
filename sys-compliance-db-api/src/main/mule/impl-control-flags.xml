@@ -1,0 +1,221 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- NOTE: SQL text deliberately contains no ':' except named parameters.
+         Timestamps are formatted with '%T' (= HH:mm:ss) and the +05:30 offset
+         is added in DataWeave. -->
+
+    <!-- ===================== /health ===================== -->
+    <sub-flow name="impl-health" doc:name="impl-health">
+        <db:select config-ref="Compliance_Database_Config" doc:name="SELECT 1">
+            <db:sql><![CDATA[SELECT 1 AS ok]]></db:sql>
+        </db:select>
+        <ee:transform doc:name="Health response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ status: "UP", database: if ((payload[0].ok default 0) == 1) "UP" else "DOWN" }]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== /control/{reportType}/{entityCode} ===================== -->
+    <sub-flow name="impl-get-control" doc:name="impl-get-control">
+        <set-variable variableName="reportKey" doc:name="reportKey"
+            value="#[{ reportType: attributes.uriParams.reportType, entityCode: attributes.uriParams.entityCode }]" />
+        <db:select config-ref="Compliance_Database_Config" doc:name="Select bookmark">
+            <db:sql><![CDATA[
+SELECT report_type,
+       entity_code,
+       DATE_FORMAT(last_reported_upto, '%Y-%m-%d %T') AS last_reported_upto,
+       last_successful_run,
+       last_sequence_number,
+       DATE_FORMAT(updated_at, '%Y-%m-%d %T')         AS updated_at
+FROM   compliance_report_control
+WHERE  report_type = :reportType
+AND    entity_code = :entityCode
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[vars.reportKey]]]></db:input-parameters>
+        </db:select>
+        <choice doc:name="Found?">
+            <when expression="#[isEmpty(payload)]">
+                <raise-error type="APP:NOT_FOUND" doc:name="Not found"
+                    description="#['No control row for ' ++ vars.reportKey.reportType ++ '/' ++ vars.reportKey.entityCode]" />
+            </when>
+        </choice>
+        <ee:transform doc:name="ControlState">
+            <ee:message>
+                <ee:set-payload resource="dwl/control-response.dwl" />
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /flags (one page, keyset pagination) ===================== -->
+    <sub-flow name="impl-get-flag-page" doc:name="impl-get-flag-page">
+        <ee:transform doc:name="Page parameters">
+            <ee:variables>
+                <ee:set-variable variableName="pageParams" resource="dwl/flag-page-params.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <logger level="DEBUG" category="com.cbit.compliance.sys.db" doc:name="Log page request"
+            message="#['flag page ' ++ write(vars.pageParams, 'application/json', {indent:false})]" />
+        <!-- limit + 1 rows are fetched to know whether another page exists -->
+        <db:select config-ref="Compliance_Database_Config" fetchSize="${db.fetchSize}" doc:name="Select flag page">
+            <db:sql><![CDATA[
+SELECT f.flag_seq,
+       t.transaction_id,
+       DATE_FORMAT(t.transaction_datetime, '%Y-%m-%d %T')        AS transaction_datetime,
+       t.account_number,
+       t.customer_id,
+       COALESCE(c.customer_name, :missingCustomerName)           AS customer_name,
+       COALESCE(c.customer_type, :missingCustomerType)           AS customer_type,
+       CASE WHEN c.customer_id IS NULL THEN 1 ELSE 0 END         AS customer_missing,
+       t.transaction_type,
+       t.channel,
+       t.currency,
+       t.amount,
+       t.counterparty_name,
+       t.counterparty_country,
+       f.flag_code,
+       f.flag_reason,
+       DATE_FORMAT(f.flagged_at, '%Y-%m-%d %T')                  AS flagged_at,
+       f.reviewed_by,
+       f.review_status
+FROM   transaction_flags f
+JOIN   transactions t      ON t.transaction_id = f.transaction_id
+LEFT JOIN customers c      ON c.customer_id    = t.customer_id
+WHERE  f.flagged_at >= :periodStart
+AND    f.flagged_at <  :periodEnd
+AND    (    (:mode = 'PENDING' AND f.report_status   = 'PENDING_REPORT')
+         OR (:mode = 'RUN'     AND f.reported_run_id = :runId)
+         OR (:mode = 'ALL') )
+AND    (f.flagged_at, t.transaction_id, f.flag_code) > (:afterFlaggedAt, :afterTransactionId, :afterFlagCode)
+ORDER BY f.flagged_at, t.transaction_id, f.flag_code
+LIMIT  :fetchLimit
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[vars.pageParams - "pageLimit"]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="FlagPage">
+            <ee:message>
+                <ee:set-payload resource="dwl/flag-page-response.dwl" />
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /flags/summary (independent aggregate) ===================== -->
+    <sub-flow name="impl-get-flag-summary" doc:name="impl-get-flag-summary">
+        <ee:transform doc:name="Summary parameters">
+            <ee:variables>
+                <ee:set-variable variableName="summaryParams"><![CDATA[%dw 2.0
+output application/java
+var q = attributes.queryParams
+---
+{
+  periodStart: q.periodStart,
+  periodEnd:   q.periodEnd,
+  mode:        q.mode default "PENDING",
+  runId:       q.runId default ""
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <!-- Deliberately NO join to customers: a missing customer must not vanish from both sides -->
+        <db:select config-ref="Compliance_Database_Config" target="totals" doc:name="Aggregate totals">
+            <db:sql><![CDATA[
+SELECT COUNT(*)                                                            AS record_count,
+       COALESCE(SUM(t.amount), 0)                                          AS total_amount,
+       COUNT(DISTINCT t.customer_id)                                       AS customer_count,
+       COALESCE(SUM(CASE WHEN f.report_status = 'PENDING_REPORT' THEN 1 ELSE 0 END), 0) AS pending_count
+FROM   transaction_flags f
+JOIN   transactions t ON t.transaction_id = f.transaction_id
+WHERE  f.flagged_at >= :periodStart
+AND    f.flagged_at <  :periodEnd
+AND    (    (:mode = 'PENDING' AND f.report_status   = 'PENDING_REPORT')
+         OR (:mode = 'RUN'     AND f.reported_run_id = :runId)
+         OR (:mode = 'ALL') )
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[vars.summaryParams]]]></db:input-parameters>
+        </db:select>
+        <db:select config-ref="Compliance_Database_Config" target="byFlag" doc:name="Breakdown by flag code">
+            <db:sql><![CDATA[
+SELECT f.flag_code,
+       COUNT(*)       AS cnt,
+       SUM(t.amount)  AS amount
+FROM   transaction_flags f
+JOIN   transactions t ON t.transaction_id = f.transaction_id
+WHERE  f.flagged_at >= :periodStart
+AND    f.flagged_at <  :periodEnd
+AND    (    (:mode = 'PENDING' AND f.report_status   = 'PENDING_REPORT')
+         OR (:mode = 'RUN'     AND f.reported_run_id = :runId)
+         OR (:mode = 'ALL') )
+GROUP BY f.flag_code
+ORDER BY f.flag_code
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[vars.summaryParams]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="FlagSummary">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var t = vars.totals[0]
+---
+{
+  recordCount:   t.record_count as Number,
+  totalAmount:   t.total_amount as Number,
+  customerCount: t.customer_count as Number,
+  pendingCount:  t.pending_count as Number,
+  byFlag: vars.byFlag map {
+    flagCode: $.flag_code,
+    count:    $.cnt as Number,
+    amount:   $.amount as Number
+  }
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /flags/late (late-flag sentinel) ===================== -->
+    <sub-flow name="impl-get-late-flags" doc:name="impl-get-late-flags">
+        <db:select config-ref="Compliance_Database_Config" doc:name="Pending flags before bookmark">
+            <db:sql><![CDATA[
+SELECT f.flag_seq,
+       f.transaction_id,
+       f.flag_code,
+       DATE_FORMAT(f.flagged_at, '%Y-%m-%d %T') AS flagged_at,
+       t.amount
+FROM   transaction_flags f
+JOIN   transactions t               ON t.transaction_id = f.transaction_id
+JOIN   compliance_report_control c  ON c.report_type = :reportType AND c.entity_code = :entityCode
+WHERE  f.report_status = 'PENDING_REPORT'
+AND    f.flagged_at < c.last_reported_upto
+ORDER BY f.flagged_at, f.transaction_id, f.flag_code
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+    reportType: attributes.queryParams.reportType default p('report.defaultType'),
+    entityCode: attributes.queryParams.entityCode default p('report.defaultEntity')
+}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="LateFlag[]">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map {
+  flagSeq:       $.flag_seq as Number,
+  transactionId: $.transaction_id,
+  flagCode:      $.flag_code,
+  flaggedAt:     $.flagged_at,
+  amount:        $.amount as Number
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>

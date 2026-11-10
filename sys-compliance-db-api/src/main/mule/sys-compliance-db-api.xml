@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <!-- ============ Entry point: listener + APIkit router ============ -->
+    <flow name="sys-compliance-db-api-main" doc:name="sys-compliance-db-api-main">
+        <http:listener config-ref="sys_db_http_listener_config" path="/api/*" doc:name="Listener /api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log request"
+            message="#['sys-db-api ' ++ attributes.method ++ ' ' ++ attributes.requestPath ++ ' correlationId=' ++ correlationId]" />
+        <apikit:router config-ref="sys-compliance-db-api-config" doc:name="APIkit router" />
+        <error-handler ref="global-error-handler" />
+    </flow>
+
+    <!-- ============ One flow per RAML method (names follow the APIkit convention) ============ -->
+
+    <flow name="get:\health:sys-compliance-db-api-config">
+        <flow-ref name="impl-health" doc:name="impl-health" />
+    </flow>
+
+    <flow name="get:\control\(reportType)\(entityCode):sys-compliance-db-api-config">
+        <flow-ref name="impl-get-control" doc:name="impl-get-control" />
+    </flow>
+
+    <flow name="get:\flags:sys-compliance-db-api-config">
+        <flow-ref name="impl-get-flag-page" doc:name="impl-get-flag-page" />
+    </flow>
+
+    <flow name="get:\flags\summary:sys-compliance-db-api-config">
+        <flow-ref name="impl-get-flag-summary" doc:name="impl-get-flag-summary" />
+    </flow>
+
+    <flow name="get:\flags\late:sys-compliance-db-api-config">
+        <flow-ref name="impl-get-late-flags" doc:name="impl-get-late-flags" />
+    </flow>
+
+    <flow name="post:\runs:application\json:sys-compliance-db-api-config">
+        <flow-ref name="impl-create-run" doc:name="impl-create-run" />
+    </flow>
+
+    <flow name="get:\runs:sys-compliance-db-api-config">
+        <flow-ref name="impl-list-runs" doc:name="impl-list-runs" />
+    </flow>
+
+    <flow name="get:\runs\(runId):sys-compliance-db-api-config">
+        <flow-ref name="impl-get-run" doc:name="impl-get-run" />
+    </flow>
+
+    <flow name="patch:\runs\(runId):application\json:sys-compliance-db-api-config">
+        <flow-ref name="impl-update-run" doc:name="impl-update-run" />
+    </flow>
+
+    <flow name="get:\sequences\next:sys-compliance-db-api-config">
+        <flow-ref name="impl-next-sequence" doc:name="impl-next-sequence" />
+    </flow>
+
+    <flow name="get:\chain:sys-compliance-db-api-config">
+        <flow-ref name="impl-get-chain" doc:name="impl-get-chain" />
+    </flow>
+
+    <flow name="get:\chain\head:sys-compliance-db-api-config">
+        <flow-ref name="impl-get-chain-head" doc:name="impl-get-chain-head" />
+    </flow>
+
+    <flow name="post:\reports\finalize:application\json:sys-compliance-db-api-config">
+        <flow-ref name="impl-finalize-report" doc:name="impl-finalize-report" />
+    </flow>
+
+    <flow name="post:\archive:application\json:sys-compliance-db-api-config">
+        <flow-ref name="impl-archive-file" doc:name="impl-archive-file" />
+    </flow>
+
+    <flow name="get:\archive:sys-compliance-db-api-config">
+        <flow-ref name="impl-list-archive" doc:name="impl-list-archive" />
+    </flow>
+
+    <flow name="get:\archive\(runId)\(fileType):sys-compliance-db-api-config">
+        <flow-ref name="impl-get-archive-content" doc:name="impl-get-archive-content" />
+    </flow>
+</mule>

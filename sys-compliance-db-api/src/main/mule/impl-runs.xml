@@ -1,0 +1,265 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ===================== POST /runs ===================== -->
+    <sub-flow name="impl-create-run" doc:name="impl-create-run">
+        <set-variable variableName="runId" value="#[payload.runId]" doc:name="runId" />
+        <db:insert config-ref="Compliance_Database_Config" doc:name="Insert run (STARTED)">
+            <db:sql><![CDATA[
+INSERT INTO compliance_report_runs
+  (run_id, report_type, entity_code, report_date, period_start, period_end,
+   is_revision, revision_of_run_id, triggered_by, run_status, notification_status,
+   started_at, correlation_id)
+VALUES
+  (:runId, :reportType, :entityCode, :reportDate, :periodStart, :periodEnd,
+   :isRevision, :revisionOfRunId, :triggeredBy, 'STARTED', 'PENDING',
+   NOW(), :correlationId)
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+    runId:           payload.runId,
+    reportType:      payload.reportType,
+    entityCode:      payload.entityCode,
+    reportDate:      payload.reportDate as String,
+    periodStart:     payload.periodStart,
+    periodEnd:       payload.periodEnd,
+    isRevision:      payload.isRevision default false,
+    revisionOfRunId: payload.revisionOfRunId,
+    triggeredBy:     payload.triggeredBy,
+    correlationId:   payload.correlationId default correlationId
+}]]]></db:input-parameters>
+        </db:insert>
+        <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log run created"
+            message="#['run created runId=' ++ vars.runId]" />
+        <flow-ref name="select-run-by-id" doc:name="select-run-by-id" />
+        <set-variable variableName="httpStatus" value="201" doc:name="201 Created" />
+    </sub-flow>
+
+    <!-- ===================== GET /runs/{runId} ===================== -->
+    <sub-flow name="impl-get-run" doc:name="impl-get-run">
+        <set-variable variableName="runId" value="#[attributes.uriParams.runId]" doc:name="runId" />
+        <flow-ref name="select-run-by-id" doc:name="select-run-by-id" />
+    </sub-flow>
+
+    <sub-flow name="select-run-by-id" doc:name="select-run-by-id">
+        <db:select config-ref="Compliance_Database_Config" doc:name="Select run">
+            <db:sql><![CDATA[
+SELECT run_id, report_type, entity_code,
+       DATE_FORMAT(report_date,  '%Y-%m-%d')    AS report_date,
+       DATE_FORMAT(period_start, '%Y-%m-%d %T') AS period_start,
+       DATE_FORMAT(period_end,   '%Y-%m-%d %T') AS period_end,
+       sequence_number, is_revision, revision_of_run_id,
+       record_count, total_amount, customer_count, completeness_ok, is_nil_report,
+       output_file_path, archive_file_path, file_checksum, detail_checksum,
+       prev_chain_hash, chain_hash, delivery_method, volume_deviation_pct,
+       notification_status, triggered_by, run_status, error_code, error_message, ai_summary,
+       DATE_FORMAT(started_at,   '%Y-%m-%d %T') AS started_at,
+       DATE_FORMAT(completed_at, '%Y-%m-%d %T') AS completed_at,
+       correlation_id
+FROM   compliance_report_runs
+WHERE  run_id = :runId
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ runId: vars.runId }]]]></db:input-parameters>
+        </db:select>
+        <choice doc:name="Found?">
+            <when expression="#[isEmpty(payload)]">
+                <raise-error type="APP:NOT_FOUND" description="#['Run not found: ' ++ (vars.runId default '')]" doc:name="Not found" />
+            </when>
+        </choice>
+        <ee:transform doc:name="Run">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+import mapRun from dwl::runMapper
+output application/json
+---
+mapRun(payload[0])]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /runs (history) ===================== -->
+    <sub-flow name="impl-list-runs" doc:name="impl-list-runs">
+        <db:select config-ref="Compliance_Database_Config" doc:name="Select runs">
+            <db:sql><![CDATA[
+SELECT run_id, report_type, entity_code,
+       DATE_FORMAT(report_date,  '%Y-%m-%d')    AS report_date,
+       DATE_FORMAT(period_start, '%Y-%m-%d %T') AS period_start,
+       DATE_FORMAT(period_end,   '%Y-%m-%d %T') AS period_end,
+       sequence_number, is_revision, revision_of_run_id,
+       record_count, total_amount, customer_count, completeness_ok, is_nil_report,
+       output_file_path, archive_file_path, file_checksum, detail_checksum,
+       prev_chain_hash, chain_hash, delivery_method, volume_deviation_pct,
+       notification_status, triggered_by, run_status, error_code, error_message, ai_summary,
+       DATE_FORMAT(started_at,   '%Y-%m-%d %T') AS started_at,
+       DATE_FORMAT(completed_at, '%Y-%m-%d %T') AS completed_at,
+       correlation_id
+FROM   compliance_report_runs
+WHERE  report_type = :reportType
+AND    entity_code = :entityCode
+AND    (:status     IS NULL OR run_status  = :status)
+AND    (:reportDate IS NULL OR report_date = :reportDate)
+ORDER BY started_at DESC, run_id DESC
+LIMIT  :maxRows
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+    reportType: attributes.queryParams.reportType default p('report.defaultType'),
+    entityCode: attributes.queryParams.entityCode default p('report.defaultEntity'),
+    status:     attributes.queryParams.status,
+    reportDate: attributes.queryParams.reportDate,
+    maxRows:    (attributes.queryParams.limit default 30) as Number
+}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="Run[]">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+import mapRun from dwl::runMapper
+output application/json
+---
+payload map mapRun($)]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== PATCH /runs/{runId} ===================== -->
+    <sub-flow name="impl-update-run" doc:name="impl-update-run">
+        <set-variable variableName="runId" value="#[attributes.uriParams.runId]" doc:name="runId" />
+        <!-- SUCCESS can only be set by /reports/finalize, inside the DB transaction -->
+        <choice doc:name="SUCCESS via PATCH?">
+            <when expression="#[payload.runStatus == 'SUCCESS']">
+                <set-variable variableName="appErrorCode" value="USE_FINALIZE" doc:name="code" />
+                <raise-error type="APP:BAD_REQUEST" doc:name="Reject"
+                    description="runStatus SUCCESS can only be set through POST /reports/finalize" />
+            </when>
+        </choice>
+        <ee:transform doc:name="Build UPDATE">
+            <ee:variables>
+                <ee:set-variable variableName="runUpdate" resource="dwl/run-update-sql.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <choice doc:name="Anything to update?">
+            <when expression="#[vars.runUpdate.fieldCount == 0]">
+                <raise-error type="APP:BAD_REQUEST" description="No updatable fields in request body" doc:name="Empty update" />
+            </when>
+        </choice>
+        <db:update config-ref="Compliance_Database_Config" doc:name="Update run">
+            <db:sql><![CDATA[#[vars.runUpdate.sql]]]></db:sql>
+            <db:input-parameters><![CDATA[#[vars.runUpdate.params]]]></db:input-parameters>
+        </db:update>
+        <choice doc:name="Row updated?">
+            <when expression="#[payload.affectedRows == 0]">
+                <raise-error type="APP:NOT_FOUND" description="#['Run not found: ' ++ vars.runId]" doc:name="Not found" />
+            </when>
+        </choice>
+        <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log update"
+            message="#['run updated runId=' ++ vars.runId ++ ' fields=' ++ write(keysOf(vars.runUpdate.params), 'application/json', {indent:false})]" />
+        <flow-ref name="select-run-by-id" doc:name="select-run-by-id" />
+    </sub-flow>
+
+    <!-- ===================== GET /sequences/next ===================== -->
+    <sub-flow name="impl-next-sequence" doc:name="impl-next-sequence">
+        <db:select config-ref="Compliance_Database_Config" doc:name="Max issued sequence">
+            <db:sql><![CDATA[
+SELECT COALESCE(MAX(sequence_number), 0) + 1 AS next_sequence,
+       COUNT(sequence_number)                AS issued_count
+FROM   compliance_report_runs
+WHERE  report_type  = :reportType
+AND    entity_code  = :entityCode
+AND    period_start = :periodStart
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+    reportType:  attributes.queryParams.reportType default p('report.defaultType'),
+    entityCode:  attributes.queryParams.entityCode default p('report.defaultEntity'),
+    periodStart: attributes.queryParams.periodStart
+}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{ nextSequence: payload[0].next_sequence as Number, issuedCount: payload[0].issued_count as Number }]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /chain ===================== -->
+    <sub-flow name="impl-get-chain" doc:name="impl-get-chain">
+        <db:select config-ref="Compliance_Database_Config" doc:name="Issued runs">
+            <db:sql><![CDATA[
+SELECT run_id,
+       DATE_FORMAT(report_date, '%Y-%m-%d')     AS report_date,
+       sequence_number, file_checksum, prev_chain_hash, chain_hash,
+       DATE_FORMAT(completed_at, '%Y-%m-%d %T') AS completed_at
+FROM   compliance_report_runs
+WHERE  report_type = :reportType
+AND    entity_code = :entityCode
+AND    run_status  = 'SUCCESS'
+AND    chain_hash IS NOT NULL
+ORDER BY completed_at, run_id
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+    reportType: attributes.queryParams.reportType default p('report.defaultType'),
+    entityCode: attributes.queryParams.entityCode default p('report.defaultEntity')
+}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="ChainLink[]">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map {
+  runId:          $.run_id,
+  reportDate:     $.report_date,
+  sequenceNumber: if ($.sequence_number == null) null else $.sequence_number as Number,
+  fileChecksum:   $.file_checksum,
+  prevChainHash:  $.prev_chain_hash,
+  chainHash:      $.chain_hash,
+  completedAt:    $.completed_at
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /chain/head ===================== -->
+    <!-- The head is the issued run whose chainHash no other issued run points to. -->
+    <sub-flow name="impl-get-chain-head" doc:name="impl-get-chain-head">
+        <db:select config-ref="Compliance_Database_Config" doc:name="Chain head">
+            <db:sql><![CDATA[
+SELECT r.run_id, r.chain_hash
+FROM   compliance_report_runs r
+WHERE  r.report_type = :reportType
+AND    r.entity_code = :entityCode
+AND    r.run_status  = 'SUCCESS'
+AND    r.chain_hash IS NOT NULL
+AND    NOT EXISTS (SELECT 1
+                   FROM   compliance_report_runs n
+                   WHERE  n.report_type     = r.report_type
+                   AND    n.entity_code     = r.entity_code
+                   AND    n.run_status      = 'SUCCESS'
+                   AND    n.prev_chain_hash = r.chain_hash)
+ORDER BY r.completed_at DESC, r.run_id DESC
+LIMIT 1
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+    reportType: attributes.queryParams.reportType default p('report.defaultType'),
+    entityCode: attributes.queryParams.entityCode default p('report.defaultEntity')
+}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="Head">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+if (isEmpty(payload)) { chainHash: "GENESIS", runId: null }
+else { chainHash: payload[0].chain_hash, runId: payload[0].run_id }]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>

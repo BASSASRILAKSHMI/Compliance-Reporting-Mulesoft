@@ -1,0 +1,15 @@
+# Normalise text files, but keep Mule sources and report fixtures byte-exact.
+* text=auto
+
+# Mule sources: always LF so builds are identical on Windows and CloudHub (Linux)
+*.xml   text eol=lf
+*.dwl   text eol=lf
+*.raml  text eol=lf
+*.yaml  text eol=lf
+*.properties text eol=lf
+*.json  text eol=lf
+
+# Regulatory report fixtures used by MUnit byte-identical tests: never touch
+*.csv   -text
+*.dat   -text
+*.sig   -text

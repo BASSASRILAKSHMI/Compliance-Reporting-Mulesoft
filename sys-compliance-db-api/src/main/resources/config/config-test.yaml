@@ -1,0 +1,24 @@
+# sys-compliance-db-api - MUnit (all database calls are mocked)
+http:
+  port: "8093"
+api:
+  id: "0"
+db:
+  host: "localhost"
+  port: "4000"
+  name: "compliance"
+  sslMode: "DISABLED"
+  fetchSize: "500"
+  pool:
+    max: "1"
+  reconnect:
+    frequencyMs: "1000"
+    attempts: "0"
+flags:
+  pageSize: "500"
+report:
+  defaultType: "STR"
+  defaultEntity: "ENT0091"
+  missingCustomer:
+    name: "UNKNOWN_CUSTOMER"
+    type: "UNKNOWN"

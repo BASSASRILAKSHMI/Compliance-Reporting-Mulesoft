@@ -1,0 +1,37 @@
+# ---- Mule / Maven build output ----
+target/
+**/target/
+.mule/
+**/.mule/
+*.jar
+!**/src/**/*.jar
+
+# ---- Anypoint Studio / Eclipse ----
+.metadata/
+.settings/
+.classpath
+.project
+.tooling-project
+.studio/
+bin/
+*.launch
+
+# ---- IDEs / OS ----
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ---- Secrets: never commit real credentials ----
+# Encrypted secure properties are committed; the encryption key is NOT.
+*.key
+**/secure-local-plain.properties
+.env
+*.env
+
+# ---- Local runtime artefacts ----
+**/compliance-output/
+**/compliance-archive/
+logs/
+*.log

@@ -1,0 +1,135 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!--
+      POST /reports/finalize
+      ONE local DB transaction:
+        1. flags PENDING_REPORT -> REPORTED            (count must equal expectedFlagUpdates)
+        2. run STARTED -> SUCCESS with its sequence      (exactly 1 row)
+        3. bookmark periodStart -> periodEnd             (only if it still equals periodStart)
+      Any check failing raises APP:CONFLICT inside the Try, so the whole transaction rolls back
+      and the period stays unreported -> it is retried, never skipped (FR15, NS 3-5).
+    -->
+    <sub-flow name="impl-finalize-report" doc:name="impl-finalize-report">
+        <set-variable variableName="fin" value="#[payload]" doc:name="request" />
+        <set-variable variableName="flagsUpdated" value="#[0]" doc:name="flagsUpdated = 0" />
+
+        <try doc:name="DB transaction" transactionalAction="ALWAYS_BEGIN" transactionType="LOCAL">
+
+            <!-- 1. mark flags (not for a pure reproduction, mode RUN) -->
+            <choice doc:name="Mark flags?">
+                <when expression="#[vars.fin.flagMode != 'RUN']">
+                    <db:update config-ref="Compliance_Database_Config" doc:name="Flags -> REPORTED">
+                        <db:sql><![CDATA[
+UPDATE transaction_flags
+SET    report_status   = 'REPORTED',
+       reported_run_id = :runId
+WHERE  flagged_at >= :periodStart
+AND    flagged_at <  :periodEnd
+AND    report_status = 'PENDING_REPORT'
+]]></db:sql>
+                        <db:input-parameters><![CDATA[#[{
+    runId:       vars.fin.runId,
+    periodStart: vars.fin.periodStart,
+    periodEnd:   vars.fin.periodEnd
+}]]]></db:input-parameters>
+                    </db:update>
+                    <set-variable variableName="flagsUpdated" value="#[payload.affectedRows]" doc:name="flagsUpdated" />
+                </when>
+            </choice>
+            <choice doc:name="Flag count as expected?">
+                <when expression="#[vars.flagsUpdated != vars.fin.expectedFlagUpdates]">
+                    <set-variable variableName="appErrorCode" value="FLAG_COUNT_CHANGED" doc:name="code" />
+                    <raise-error type="APP:CONFLICT" doc:name="Rollback"
+                        description="#['Expected ' ++ (vars.fin.expectedFlagUpdates as String) ++ ' flags to be marked REPORTED but ' ++ (vars.flagsUpdated as String) ++ ' matched. Flags changed after extraction - run must be repeated.']" />
+                </when>
+            </choice>
+
+            <!-- 2. run -> SUCCESS (the unique key rejects a duplicate sequence) -->
+            <db:update config-ref="Compliance_Database_Config" doc:name="Run -> SUCCESS">
+                <db:sql><![CDATA[
+UPDATE compliance_report_runs
+SET    sequence_number = :sequenceNumber,
+       run_status      = 'SUCCESS',
+       completed_at    = NOW()
+WHERE  run_id     = :runId
+AND    run_status = 'STARTED'
+]]></db:sql>
+                <db:input-parameters><![CDATA[#[{ runId: vars.fin.runId, sequenceNumber: vars.fin.sequenceNumber }]]]></db:input-parameters>
+            </db:update>
+            <choice doc:name="Run updated?">
+                <when expression="#[payload.affectedRows != 1]">
+                    <set-variable variableName="appErrorCode" value="RUN_NOT_STARTED" doc:name="code" />
+                    <raise-error type="APP:CONFLICT" doc:name="Rollback"
+                        description="#['Run ' ++ vars.fin.runId ++ ' is not in STARTED state']" />
+                </when>
+            </choice>
+
+            <!-- 3. bookmark, optimistic check on the old value -->
+            <choice doc:name="Advance bookmark?">
+                <when expression="#[vars.fin.advanceControl == true]">
+                    <db:update config-ref="Compliance_Database_Config" doc:name="Advance control">
+                        <db:sql><![CDATA[
+UPDATE compliance_report_control
+SET    last_reported_upto   = :periodEnd,
+       last_successful_run  = :runId,
+       last_sequence_number = :sequenceNumber,
+       updated_at           = NOW()
+WHERE  report_type        = :reportType
+AND    entity_code        = :entityCode
+AND    last_reported_upto = :periodStart
+]]></db:sql>
+                        <db:input-parameters><![CDATA[#[{
+    runId:          vars.fin.runId,
+    sequenceNumber: vars.fin.sequenceNumber,
+    reportType:     vars.fin.reportType,
+    entityCode:     vars.fin.entityCode,
+    periodStart:    vars.fin.periodStart,
+    periodEnd:      vars.fin.periodEnd
+}]]]></db:input-parameters>
+                    </db:update>
+                    <choice doc:name="Bookmark moved?">
+                        <when expression="#[payload.affectedRows != 1]">
+                            <set-variable variableName="appErrorCode" value="CONTROL_CONFLICT" doc:name="code" />
+                            <raise-error type="APP:CONFLICT" doc:name="Rollback"
+                                description="#['Bookmark is no longer at ' ++ vars.fin.periodStart ++ ' - another run already reported this period']" />
+                        </when>
+                    </choice>
+                </when>
+            </choice>
+        </try>
+
+        <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log finalized"
+            message="#['finalized runId=' ++ vars.fin.runId ++ ' seq=' ++ (vars.fin.sequenceNumber as String) ++ ' flags=' ++ (vars.flagsUpdated as String) ++ ' controlAdvanced=' ++ (vars.fin.advanceControl as String)]" />
+
+        <db:select config-ref="Compliance_Database_Config" doc:name="Read bookmark">
+            <db:sql><![CDATA[
+SELECT DATE_FORMAT(last_reported_upto, '%Y-%m-%d %T') AS last_reported_upto
+FROM   compliance_report_control
+WHERE  report_type = :reportType AND entity_code = :entityCode
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ reportType: vars.fin.reportType, entityCode: vars.fin.entityCode }]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="Response">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  runId:            vars.fin.runId,
+  flagsUpdated:     vars.flagsUpdated as Number,
+  controlAdvanced:  vars.fin.advanceControl,
+  lastReportedUpto: payload[0].last_reported_upto
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>

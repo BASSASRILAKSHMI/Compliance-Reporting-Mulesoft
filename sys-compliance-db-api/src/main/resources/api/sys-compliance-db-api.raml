@@ -1,0 +1,454 @@
+#%RAML 1.0
+title: sys-compliance-db-api
+version: v1
+description: |
+  System API that owns every SQL statement of the Regulatory Compliance Reporting solution.
+  No other application connects to the database.
+  All timestamps are IST and exchanged as "yyyy-MM-dd HH:mm:ss" (no offset) in requests,
+  and as ISO-8601 with "+05:30" in responses.
+mediaType: application/json
+baseUri: http://localhost:8083/api
+
+types:
+  Timestamp:
+    type: string
+    pattern: ^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$
+    example: "2026-11-05 21:00:00"
+
+  FlagMode:
+    type: string
+    enum: [PENDING, RUN, ALL]
+    description: |
+      PENDING = flags not yet reported (normal nightly run)
+      RUN     = flags reported by a given run (byte-identical reproduction)
+      ALL     = every flag in the window, reported or not (revision)
+
+  Error:
+    properties:
+      errorCode: string
+      message: string
+      correlationId?: string
+
+  ControlState:
+    properties:
+      reportType: string
+      entityCode: string
+      lastReportedUpto: string
+      lastSuccessfulRun?: string | nil
+      lastSequenceNumber: integer
+      updatedAt?: string | nil
+
+  FlagRecord:
+    properties:
+      flagSeq: integer
+      transactionId: string
+      transactionDatetime: string
+      accountNumber: string
+      customerId: string
+      customerName: string
+      customerType: string
+      customerMissing: boolean
+      transactionType: string
+      channel: string
+      currency: string
+      amount: number
+      counterpartyName?: string | nil
+      counterpartyCountry?: string | nil
+      flagCode: string
+      flagReason?: string | nil
+      flaggedAt: string
+      reviewedBy?: string | nil
+      reviewStatus?: string | nil
+
+  Cursor:
+    properties:
+      afterFlaggedAt: Timestamp
+      afterTransactionId: string
+      afterFlagCode: string
+
+  FlagPage:
+    properties:
+      records: FlagRecord[]
+      count: integer
+      hasMore: boolean
+      nextCursor?: Cursor | nil
+
+  FlagBreakdown:
+    properties:
+      flagCode: string
+      count: integer
+      amount: number
+
+  FlagSummary:
+    properties:
+      recordCount: integer
+      totalAmount: number
+      customerCount: integer
+      pendingCount: integer
+      byFlag: FlagBreakdown[]
+
+  LateFlag:
+    properties:
+      flagSeq: integer
+      transactionId: string
+      flagCode: string
+      flaggedAt: string
+      amount: number
+
+  RunCreate:
+    properties:
+      runId: string
+      reportType: string
+      entityCode: string
+      reportDate: date-only
+      periodStart: Timestamp
+      periodEnd: Timestamp
+      isRevision?: boolean
+      revisionOfRunId?: string | nil
+      triggeredBy: string
+      correlationId?: string
+
+  RunUpdate:
+    description: Any subset of the updatable audit columns. Unknown properties are rejected.
+    additionalProperties: false
+    properties:
+      recordCount?: integer
+      totalAmount?: number
+      customerCount?: integer
+      completenessOk?: boolean
+      isNilReport?: boolean
+      outputFilePath?: string
+      archiveFilePath?: string
+      fileChecksum?: string
+      detailChecksum?: string
+      prevChainHash?: string
+      chainHash?: string
+      deliveryMethod?: string
+      volumeDeviationPct?: number
+      notificationStatus?: string
+      runStatus?: string
+      errorCode?: string
+      errorMessage?: string
+      aiSummary?: string
+      completedAt?: Timestamp
+
+  Run:
+    properties:
+      runId: string
+      reportType: string
+      entityCode: string
+      reportDate?: string | nil
+      periodStart: string
+      periodEnd: string
+      sequenceNumber?: integer | nil
+      isRevision: boolean
+      revisionOfRunId?: string | nil
+      recordCount: integer
+      totalAmount: number
+      customerCount?: integer | nil
+      completenessOk: boolean
+      isNilReport: boolean
+      outputFilePath?: string | nil
+      archiveFilePath?: string | nil
+      fileChecksum?: string | nil
+      detailChecksum?: string | nil
+      prevChainHash?: string | nil
+      chainHash?: string | nil
+      deliveryMethod?: string | nil
+      volumeDeviationPct?: number | nil
+      notificationStatus?: string | nil
+      triggeredBy: string
+      runStatus: string
+      errorCode?: string | nil
+      errorMessage?: string | nil
+      aiSummary?: string | nil
+      startedAt?: string | nil
+      completedAt?: string | nil
+      correlationId?: string | nil
+
+  FinalizeRequest:
+    properties:
+      runId: string
+      reportType: string
+      entityCode: string
+      periodStart: Timestamp
+      periodEnd: Timestamp
+      sequenceNumber: integer
+      flagMode: FlagMode
+      expectedFlagUpdates:
+        type: integer
+        description: Flags that must change PENDING_REPORT -> REPORTED. Any other number rolls the whole transaction back.
+      advanceControl: boolean
+
+  ArchiveFile:
+    properties:
+      runId: string
+      fileType:
+        enum: [SUBMISSION, SUMMARY, SIGNATURE]
+      fileName: string
+      checksum:
+        type: string
+        description: SHA-256 (lower-case hex) of the whole file. Verified by this API before storing.
+      contentBase64: string
+
+  ArchiveEntry:
+    properties:
+      runId: string
+      fileType: string
+      fileName: string
+      fileSize: integer
+      checksum: string
+      chunks: integer
+      createdAt: string
+
+  ArchiveContent:
+    type: ArchiveEntry
+    properties:
+      contentBase64: string
+
+  ChainLink:
+    properties:
+      runId: string
+      reportDate?: string | nil
+      sequenceNumber?: integer | nil
+      fileChecksum?: string | nil
+      prevChainHash?: string | nil
+      chainHash?: string | nil
+      completedAt?: string | nil
+
+traits:
+  reportKey:
+    queryParameters:
+      reportType:
+        type: string
+        default: STR
+        required: false
+      entityCode:
+        type: string
+        default: ENT0091
+        required: false
+  errors:
+    responses:
+      400:
+        body: Error
+      500:
+        body: Error
+      503:
+        body: Error
+
+/health:
+  get:
+    description: Liveness + database connectivity.
+    responses:
+      200:
+        body:
+          properties:
+            status: string
+            database: string
+
+/control/{reportType}/{entityCode}:
+  get:
+    is: [errors]
+    description: Current bookmark (last reported upto).
+    responses:
+      200:
+        body: ControlState
+      404:
+        body: Error
+
+/flags:
+  get:
+    is: [errors]
+    description: |
+      One page of flagged transactions for a period, ordered by flaggedAt, transactionId, flagCode.
+      Keyset pagination: pass the previous page's nextCursor to get the next page.
+      Customers are LEFT JOINed: a missing customer is returned with customerMissing=true,
+      never dropped.
+    queryParameters:
+      periodStart: Timestamp
+      periodEnd: Timestamp
+      mode:
+        type: FlagMode
+        default: PENDING
+        required: false
+      runId:
+        type: string
+        required: false
+      afterFlaggedAt:
+        type: Timestamp
+        default: "1970-01-02 00:00:00"
+        required: false
+      afterTransactionId:
+        type: string
+        default: ""
+        required: false
+      afterFlagCode:
+        type: string
+        default: ""
+        required: false
+      limit:
+        type: integer
+        minimum: 1
+        maximum: 5000
+        default: 500
+        required: false
+    responses:
+      200:
+        body: FlagPage
+
+/flags/summary:
+  get:
+    is: [errors]
+    description: |
+      Independent aggregate for the completeness check. Deliberately does NOT join customers,
+      so a missing customer record shows up as a mismatch instead of vanishing from both sides.
+    queryParameters:
+      periodStart: Timestamp
+      periodEnd: Timestamp
+      mode:
+        type: FlagMode
+        default: PENDING
+        required: false
+      runId:
+        type: string
+        required: false
+    responses:
+      200:
+        body: FlagSummary
+
+/flags/late:
+  get:
+    is: [reportKey, errors]
+    description: Flags still PENDING_REPORT whose flaggedAt is before the bookmark (already reported period).
+    responses:
+      200:
+        body: LateFlag[]
+
+/runs:
+  post:
+    is: [errors]
+    description: Records the start of a run (status STARTED, sequence NULL).
+    body: RunCreate
+    responses:
+      201:
+        body: Run
+      409:
+        body: Error
+  get:
+    is: [reportKey, errors]
+    queryParameters:
+      status:
+        type: string
+        required: false
+      reportDate:
+        type: date-only
+        required: false
+      limit:
+        type: integer
+        default: 30
+        required: false
+        maximum: 500
+    responses:
+      200:
+        body: Run[]
+
+/runs/{runId}:
+  get:
+    is: [errors]
+    responses:
+      200:
+        body: Run
+      404:
+        body: Error
+  patch:
+    is: [errors]
+    body: RunUpdate
+    responses:
+      200:
+        body: Run
+      404:
+        body: Error
+
+/sequences/next:
+  get:
+    is: [reportKey, errors]
+    description: Next sequence number for a period (1 for an original report, 2+ for revisions).
+    queryParameters:
+      periodStart: Timestamp
+    responses:
+      200:
+        body:
+          properties:
+            nextSequence: integer
+            issuedCount: integer
+
+/chain:
+  get:
+    is: [reportKey, errors]
+    description: All issued runs in chain order (oldest first), for hash-chain verification.
+    responses:
+      200:
+        body: ChainLink[]
+
+/chain/head:
+  get:
+    is: [reportKey, errors]
+    description: chainHash of the most recent issued run ("GENESIS" when none).
+    responses:
+      200:
+        body:
+          properties:
+            chainHash: string
+            runId?: string | nil
+
+/reports/finalize:
+  post:
+    is: [errors]
+    description: |
+      One database transaction: mark flags REPORTED, set the run SUCCESS with its sequence,
+      and (optionally) advance the bookmark - only if it still equals periodStart.
+      Any mismatch rolls everything back.
+    body: FinalizeRequest
+    responses:
+      200:
+        body:
+          properties:
+            runId: string
+            flagsUpdated: integer
+            controlAdvanced: boolean
+            lastReportedUpto: string
+      409:
+        body: Error
+
+/archive:
+  post:
+    is: [errors]
+    description: Insert-only. Verifies the checksum, then stores the file (chunked). An existing file is never overwritten.
+    body: ArchiveFile
+    responses:
+      201:
+        body: ArchiveEntry
+      409:
+        body: Error
+  get:
+    is: [errors]
+    queryParameters:
+      fileName:
+        type: string
+        required: false
+      runId:
+        type: string
+        required: false
+    responses:
+      200:
+        body: ArchiveEntry[]
+
+/archive/{runId}/{fileType}:
+  get:
+    is: [errors]
+    description: Returns the exact stored bytes (base64) of one archived file.
+    responses:
+      200:
+        body: ArchiveContent
+      404:
+        body: Error

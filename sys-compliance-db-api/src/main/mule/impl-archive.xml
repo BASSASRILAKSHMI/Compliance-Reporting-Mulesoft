@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:db="http://www.mulesoft.org/schema/mule/db"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ===================== POST /archive (insert-only) ===================== -->
+    <sub-flow name="impl-archive-file" doc:name="impl-archive-file">
+        <ee:transform doc:name="Decode, checksum, chunk">
+            <ee:variables>
+                <ee:set-variable variableName="arc" resource="dwl/archive-prepare.dwl" />
+            </ee:variables>
+        </ee:transform>
+
+        <!-- 1. the bytes received must be exactly the bytes the caller generated -->
+        <choice doc:name="Checksum matches?">
+            <when expression="#[vars.arc.actualChecksum != vars.arc.expectedChecksum]">
+                <set-variable variableName="appErrorCode" value="CHECKSUM_MISMATCH" doc:name="code" />
+                <raise-error type="APP:BAD_REQUEST" doc:name="Reject"
+                    description="#['Checksum mismatch for ' ++ vars.arc.fileName ++ ': expected ' ++ vars.arc.expectedChecksum ++ ' got ' ++ vars.arc.actualChecksum]" />
+            </when>
+        </choice>
+
+        <!-- 2. never overwrite: an existing file is rejected AND logged (NS 6) -->
+        <db:select config-ref="Compliance_Database_Config" doc:name="Already archived?">
+            <db:sql><![CDATA[
+SELECT COUNT(*) AS cnt
+FROM   compliance_report_archive
+WHERE  run_id = :runId AND file_type = :fileType
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{ runId: vars.arc.runId, fileType: vars.arc.fileType }]]]></db:input-parameters>
+        </db:select>
+        <choice doc:name="Exists?">
+            <when expression="#[(payload[0].cnt as Number) &gt; 0]">
+                <logger level="WARN" category="com.cbit.compliance.sys.db.audit" doc:name="AUDIT overwrite attempt"
+                    message="#['ARCHIVE_OVERWRITE_REJECTED runId=' ++ vars.arc.runId ++ ' fileType=' ++ vars.arc.fileType ++ ' fileName=' ++ vars.arc.fileName ++ ' correlationId=' ++ correlationId]" />
+                <set-variable variableName="appErrorCode" value="ARCHIVE_EXISTS" doc:name="code" />
+                <raise-error type="APP:CONFLICT" doc:name="Reject"
+                    description="#['Archived file already exists and can never be overwritten: ' ++ vars.arc.fileName]" />
+            </when>
+        </choice>
+
+        <!-- 3. insert all chunks atomically (the primary key is the last line of defence) -->
+        <try doc:name="Insert chunks" transactionalAction="ALWAYS_BEGIN" transactionType="LOCAL">
+            <foreach collection="#[vars.arc.chunks]" doc:name="For each chunk">
+                <db:insert config-ref="Compliance_Database_Config" doc:name="Insert chunk">
+                    <db:sql><![CDATA[
+INSERT INTO compliance_report_archive
+  (run_id, file_type, chunk_no, file_name, content, file_size, checksum)
+VALUES
+  (:runId, :fileType, :chunkNo, :fileName, :content, :fileSize, :checksum)
+]]></db:sql>
+                    <db:input-parameters><![CDATA[#[{
+    runId:    vars.arc.runId,
+    fileType: vars.arc.fileType,
+    chunkNo:  payload.chunkNo,
+    fileName: vars.arc.fileName,
+    content:  payload.content,
+    fileSize: vars.arc.fileSize,
+    checksum: vars.arc.actualChecksum
+}]]]></db:input-parameters>
+                </db:insert>
+            </foreach>
+        </try>
+
+        <logger level="INFO" category="com.cbit.compliance.sys.db.audit" doc:name="AUDIT archived"
+            message="#['ARCHIVED runId=' ++ vars.arc.runId ++ ' file=' ++ vars.arc.fileName ++ ' bytes=' ++ (vars.arc.fileSize as String) ++ ' chunks=' ++ (sizeOf(vars.arc.chunks) as String) ++ ' sha256=' ++ vars.arc.actualChecksum]" />
+        <set-variable variableName="httpStatus" value="201" doc:name="201 Created" />
+        <ee:transform doc:name="ArchiveEntry">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  runId:     vars.arc.runId,
+  fileType:  vars.arc.fileType,
+  fileName:  vars.arc.fileName,
+  fileSize:  vars.arc.fileSize,
+  checksum:  vars.arc.actualChecksum,
+  chunks:    sizeOf(vars.arc.chunks),
+  createdAt: now() >> "Asia/Kolkata" as String {format: "yyyy-MM-dd HH:mm:ss"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /archive (list) ===================== -->
+    <sub-flow name="impl-list-archive" doc:name="impl-list-archive">
+        <db:select config-ref="Compliance_Database_Config" doc:name="List archived files">
+            <db:sql><![CDATA[
+SELECT run_id, file_type, file_name,
+       MAX(file_size)                              AS file_size,
+       MAX(checksum)                               AS checksum,
+       COUNT(*)                                    AS chunks,
+       DATE_FORMAT(MIN(created_at), '%Y-%m-%d %T') AS created_at
+FROM   compliance_report_archive
+WHERE  (:fileName IS NULL OR file_name = :fileName)
+AND    (:runId    IS NULL OR run_id    = :runId)
+GROUP BY run_id, file_type, file_name
+ORDER BY MIN(created_at), run_id, file_type
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[{
+    fileName: attributes.queryParams.fileName,
+    runId:    attributes.queryParams.runId
+}]]]></db:input-parameters>
+        </db:select>
+        <ee:transform doc:name="ArchiveEntry[]">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+payload map {
+  runId:     $.run_id,
+  fileType:  $.file_type,
+  fileName:  $.file_name,
+  fileSize:  $.file_size as Number,
+  checksum:  $.checksum,
+  chunks:    $.chunks as Number,
+  createdAt: $.created_at
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== GET /archive/{runId}/{fileType} (exact bytes) ===================== -->
+    <sub-flow name="impl-get-archive-content" doc:name="impl-get-archive-content">
+        <set-variable variableName="arcKey" doc:name="key"
+            value="#[{ runId: attributes.uriParams.runId, fileType: attributes.uriParams.fileType }]" />
+        <db:select config-ref="Compliance_Database_Config" doc:name="Select chunks">
+            <db:sql><![CDATA[
+SELECT chunk_no, content, file_name, file_size, checksum,
+       DATE_FORMAT(created_at, '%Y-%m-%d %T') AS created_at
+FROM   compliance_report_archive
+WHERE  run_id = :runId AND file_type = :fileType
+ORDER BY chunk_no
+]]></db:sql>
+            <db:input-parameters><![CDATA[#[vars.arcKey]]]></db:input-parameters>
+        </db:select>
+        <choice doc:name="Found?">
+            <when expression="#[isEmpty(payload)]">
+                <raise-error type="APP:NOT_FOUND" doc:name="Not found"
+                    description="#['No archived ' ++ vars.arcKey.fileType ++ ' for run ' ++ vars.arcKey.runId]" />
+            </when>
+        </choice>
+        <ee:transform doc:name="ArchiveContent">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+import toBase64 from dw::core::Binaries
+output application/json
+var first = payload[0]
+---
+{
+  runId:         vars.arcKey.runId,
+  fileType:      vars.arcKey.fileType,
+  fileName:      first.file_name,
+  fileSize:      first.file_size as Number,
+  checksum:      first.checksum,
+  chunks:        sizeOf(payload),
+  createdAt:     first.created_at,
+  // every chunk except the last is exactly 3,000,000 bytes, so concatenating
+  // the base64 of each chunk equals the base64 of the whole file
+  contentBase64: (payload map toBase64($.content as Binary)) joinBy ""
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>
