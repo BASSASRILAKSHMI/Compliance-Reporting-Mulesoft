@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:email="http://www.mulesoft.org/schema/mule/email"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd
+        http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd">
+
+    <global-property doc:name="Default environment" name="env" value="local" />
+
+    <configuration-properties doc:name="App properties" file="config/config-${env}.yaml" />
+
+    <secure-properties:config name="Secure_Properties_Config" doc:name="Secure properties"
+        file="config/config-secure-${env}.yaml" key="${mule.key}">
+        <secure-properties:encrypt algorithm="AES" mode="CBC" />
+    </secure-properties:config>
+
+    <http:listener-config name="sys_notification_http_listener_config" doc:name="HTTP listener">
+        <http:listener-connection host="0.0.0.0" port="${http.port}" />
+    </http:listener-config>
+
+    <apikit:config name="sys-notification-api-config" doc:name="APIkit config"
+        api="sys-notification-api.raml"
+        outboundHeadersMapName="outboundHeaders"
+        httpStatusVarName="httpStatus" />
+
+    <!-- Gmail SMTP: port 587 + STARTTLS, authenticated with a Google App Password -->
+    <email:smtp-config name="Compliance_SMTP_Config" doc:name="SMTP" from="${smtp.from}">
+        <email:smtp-connection host="${smtp.host}" port="${smtp.port}"
+            user="${secure::smtp.user}" password="${secure::smtp.password}">
+            <reconnection>
+                <reconnect frequency="${smtp.reconnect.frequencyMs}" count="${smtp.reconnect.attempts}" />
+            </reconnection>
+            <email:properties>
+                <email:property key="mail.smtp.auth" value="true" />
+                <email:property key="mail.smtp.starttls.enable" value="true" />
+                <email:property key="mail.smtp.starttls.required" value="true" />
+                <email:property key="mail.smtp.connectiontimeout" value="15000" />
+                <email:property key="mail.smtp.timeout" value="30000" />
+            </email:properties>
+        </email:smtp-connection>
+    </email:smtp-config>
+
+    <api-gateway:autodiscovery apiId="${api.id}" ignoreBasePath="true"
+        doc:name="API Autodiscovery" flowRef="sys-notification-api-main" />
+
+    <configuration doc:name="Configuration" defaultErrorHandler-ref="global-error-handler" />
+</mule>

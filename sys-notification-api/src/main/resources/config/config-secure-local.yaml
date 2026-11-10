@@ -1,0 +1,6 @@
+# Encrypted with the Mule Secure Properties Tool (AES / CBC), same key as the other apps.
+# smtp.user     = the sender Gmail address
+# smtp.password = the 16-character Google App Password (no spaces)
+smtp:
+  user: "![q1KqjCCog/97VTnncvYm8HHVKUH/Sb1YiGEdNFybd7A=]"
+  password: "![l6OSavNXrJlfkdW27oDjx8VGTRvb7O0/PYDYO6If8FY=]"

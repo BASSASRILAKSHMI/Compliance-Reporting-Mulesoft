@@ -1,0 +1,133 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="sys-notification-api-test-suite.xml" />
+
+    <!-- a complete compliance-report request reused by several tests -->
+    <sub-flow name="test-report-request">
+        <set-payload mediaType="application/java" value="#[{
+            runStatus: 'SUCCESS', runId: 'RUN-1', reportType: 'STR', entityCode: 'ENT0091',
+            entityName: 'Bright Financial Services Ltd', periodDate: '2026-11-05',
+            periodStart: '2026-11-04T21:00:00+05:30', periodEnd: '2026-11-05T21:00:00+05:30',
+            sequenceNumber: 1, isRevision: false, completedAt: '2026-11-10T21:30:04+05:30',
+            currency: 'INR', recordCount: 3, totalAmount: 2378500, customerCount: 3,
+            completenessOutcome: 'PASSED', isNilReport: false,
+            flagSummary: [{flagCode: 'FLG-CROSS-BORDER', count: 1, amount: 1150000}],
+            volumeDeviation: false, submissionFileName: 'ENT0091_STR_20261105_001.csv',
+            summaryFileName: 'ENT0091_STR_20261105_001_summary.html', fileChecksum: 'abc',
+            archiveFilePath: '/archive/ENT0091_STR_20261105_001.csv', deliveryMethod: 'ATTACHMENT',
+            attachments: [
+              {fileName: 'ENT0091_STR_20261105_001.csv', contentType: 'text/csv', contentBase64: 'SGVsbG8='},
+              {fileName: 'ENT0091_STR_20261105_001_summary.html', contentType: 'text/html', contentBase64: 'SGVsbG8='}
+            ]
+        }]" />
+    </sub-flow>
+
+    <munit:test name="report-email-sent-with-attachments" description="Prescribed email to the configured distribution list with both files">
+        <munit:behavior>
+            <munit-tools:mock-when processor="email:send">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="Send email" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return />
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="test-report-request" />
+            <flow-ref name="impl-send-compliance-report" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.status]" is="#[MunitTools::equalTo('SENT')]" />
+            <munit-tools:assert-that expression="#[sizeOf(payload.recipients)]" is="#[MunitTools::equalTo(2)]" />
+            <munit-tools:assert-that expression="#[payload.attachments]" is="#[MunitTools::equalTo(2)]" />
+            <munit-tools:assert-that expression="#[payload.subject]" is="#[MunitTools::equalTo('STR SUCCESS – ENT0091 2026-11-05')]" />
+            <munit-tools:assert-that expression="#[vars.mail.body contains 'Please verify the checksum before onward submission to the regulator.']"
+                is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:verify-call processor="email:send" times="1" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="report-email-secure-link-has-no-attachment" description="NS 8 - oversized report goes as a link, not an attachment">
+        <munit:behavior>
+            <munit-tools:mock-when processor="email:send">
+                <munit-tools:then-return />
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="test-report-request" />
+            <set-payload value="#[payload ++ {deliveryMethod: 'SECURE_LINK', secureLink: 'https://x/download?t=abc', secureLinkExpiresAt: '2026-11-11T21:30:00+05:30'}]" />
+            <flow-ref name="impl-send-compliance-report" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.attachments]" is="#[MunitTools::equalTo(0)]" />
+            <munit-tools:assert-that expression="#[vars.mail.body contains 'https://x/download?t=abc']" is="#[MunitTools::equalTo(true)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="nil-report-declaration" description="NS 1 - NIL report email carries the nil declaration">
+        <munit:behavior>
+            <munit-tools:mock-when processor="email:send">
+                <munit-tools:then-return />
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="test-report-request" />
+            <set-payload value="#[payload ++ {isNilReport: true, recordCount: 0, totalAmount: 0, customerCount: 0, flagSummary: []}]" />
+            <flow-ref name="impl-send-compliance-report" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.mail.body contains 'This is a NIL report.']" is="#[MunitTools::equalTo(true)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="alert-email-sent" description="Alert goes to the alerts list with severity in the subject">
+        <munit:behavior>
+            <munit-tools:mock-when processor="email:send">
+                <munit-tools:then-return />
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <set-payload mediaType="application/java" value="#[{
+                severity: 'CRITICAL', alertType: 'COMPLETENESS_MISMATCH', title: 'Extraction incomplete',
+                runId: 'RUN-1', reportType: 'STR', entityCode: 'ENT0091',
+                periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00',
+                details: 'Extracted 2 / aggregate 3' }]" />
+            <flow-ref name="impl-send-alert" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload.recipients[0]]" is="#[MunitTools::equalTo('ops@test.local')]" />
+            <munit-tools:assert-that expression="#[payload.subject startsWith '[ALERT][CRITICAL] COMPLETENESS_MISMATCH']" is="#[MunitTools::equalTo(true)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="no-recipients-rejected" description="Explicit empty recipient list -> APP:BAD_REQUEST, nothing sent" expectedErrorType="APP:BAD_REQUEST">
+        <munit:execution>
+            <set-payload mediaType="application/java" value="#[{
+                to: [], severity: 'INFO', alertType: 'TEST', title: 't', details: 'd' }]" />
+            <flow-ref name="impl-send-alert" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="smtp-failure-retried-then-fails" description="NS 14 - SMTP down: retried, then RETRY_EXHAUSTED" expectedErrorType="MULE:RETRY_EXHAUSTED">
+        <munit:behavior>
+            <munit-tools:mock-when processor="email:send">
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="EMAIL:CONNECTIVITY" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <set-payload mediaType="application/java" value="#[{
+                severity: 'WARNING', alertType: 'VOLUME_DEVIATION', title: 't', details: 'd' }]" />
+            <flow-ref name="impl-send-alert" />
+        </munit:execution>
+    </munit:test>
+</mule>

@@ -1,0 +1,8 @@
+{
+  "severity": "INFO",
+  "alertType": "SMOKE_TEST",
+  "title": "sys-notification-api is wired to Gmail SMTP",
+  "reportType": "STR",
+  "entityCode": "ENT0091",
+  "details": "If you can read this, the notification system API can send email."
+}

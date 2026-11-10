@@ -1,0 +1,25 @@
+# sys-notification-api - DEV (CloudHub 2.0, Sandbox)
+http:
+  port: "8081"
+
+api:
+  id: "REPLACE_WITH_API_MANAGER_INSTANCE_ID"
+
+smtp:
+  host: "smtp.gmail.com"
+  port: "587"
+  from: "srilakshmibassa14@gmail.com"
+  reconnect:
+    frequencyMs: "3000"
+    attempts: "2"
+  retry:
+    max: "3"
+    delayMs: "5000"
+
+compliance:
+  distribution:
+    list: "bassasrilakshmi58@gmail.com"
+
+alerts:
+  distribution:
+    list: "bassasrilakshmi58@gmail.com"

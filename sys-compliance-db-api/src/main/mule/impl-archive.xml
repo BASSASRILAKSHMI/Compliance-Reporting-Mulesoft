@@ -83,7 +83,7 @@ output application/json
   fileSize:  vars.arc.fileSize,
   checksum:  vars.arc.actualChecksum,
   chunks:    sizeOf(vars.arc.chunks),
-  createdAt: now() >> "Asia/Kolkata" as String {format: "yyyy-MM-dd HH:mm:ss"}
+  createdAt: (now() >> "Asia/Kolkata") as String {format: "yyyy-MM-dd HH:mm:ss"}
 }]]></ee:set-payload>
             </ee:message>
         </ee:transform>

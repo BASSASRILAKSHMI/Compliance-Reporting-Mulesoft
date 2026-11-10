@@ -1,0 +1,4 @@
+# MUnit only - plain values (no ![...]) are read as-is by the secure-properties module.
+smtp:
+  user: "munit"
+  password: "munit"

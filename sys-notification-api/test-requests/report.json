@@ -1,0 +1,33 @@
+{
+  "runStatus": "SUCCESS",
+  "runId": "RUN-SMOKE-TEST",
+  "reportType": "STR",
+  "entityCode": "ENT0091",
+  "entityName": "Bright Financial Services Ltd",
+  "periodDate": "2026-11-05",
+  "periodStart": "2026-11-04T21:00:00+05:30",
+  "periodEnd": "2026-11-05T21:00:00+05:30",
+  "sequenceNumber": 1,
+  "isRevision": false,
+  "completedAt": "2026-11-10T21:30:04+05:30",
+  "currency": "INR",
+  "recordCount": 3,
+  "totalAmount": 2378500.00,
+  "customerCount": 3,
+  "completenessOutcome": "PASSED",
+  "isNilReport": false,
+  "flagSummary": [
+    { "flagCode": "FLG-CROSS-BORDER", "count": 1, "amount": 1150000.00 },
+    { "flagCode": "FLG-HIGH-VALUE",   "count": 1, "amount": 248500.00 },
+    { "flagCode": "FLG-STRUCTURING",  "count": 1, "amount": 980000.00 }
+  ],
+  "volumeDeviation": false,
+  "submissionFileName": "ENT0091_STR_20261105_001.csv",
+  "summaryFileName": "ENT0091_STR_20261105_001_summary.html",
+  "fileChecksum": "185f8db32271fe25f561a6fc938b2e264306ec304eda518007d1764826381969",
+  "archiveFilePath": "/compliance/archive/ENT0091_STR_20261105_001.csv",
+  "deliveryMethod": "ATTACHMENT",
+  "attachments": [
+    { "fileName": "ENT0091_STR_20261105_001.csv", "contentType": "text/csv", "contentBase64": "SGVsbG8=" }
+  ]
+}

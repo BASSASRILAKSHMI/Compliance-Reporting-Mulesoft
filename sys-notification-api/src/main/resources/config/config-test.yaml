@@ -1,0 +1,21 @@
+# sys-notification-api - MUnit (SMTP is mocked)
+http:
+  port: "8094"
+api:
+  id: "0"
+smtp:
+  host: "localhost"
+  port: "2525"
+  from: "munit@test.local"
+  reconnect:
+    frequencyMs: "1000"
+    attempts: "0"
+  retry:
+    max: "1"
+    delayMs: "10"
+compliance:
+  distribution:
+    list: "officer@test.local, deputy@test.local"
+alerts:
+  distribution:
+    list: "ops@test.local"

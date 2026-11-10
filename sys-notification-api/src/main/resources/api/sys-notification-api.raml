@@ -1,0 +1,127 @@
+#%RAML 1.0
+title: sys-notification-api
+version: v1
+description: |
+  System API that owns every outbound email of the Regulatory Compliance Reporting solution
+  (SMTP). Renders the compliance notification exactly in the format prescribed by the
+  use case, and the operational alert emails.
+mediaType: application/json
+baseUri: http://localhost:8084/api
+
+types:
+  Error:
+    properties:
+      errorCode: string
+      message: string
+      correlationId?: string
+
+  Attachment:
+    properties:
+      fileName: string
+      contentType:
+        type: string
+        default: application/octet-stream
+        required: false
+      contentBase64: string
+
+  FlagLine:
+    properties:
+      flagCode: string
+      count: integer
+      amount: number
+
+  ReportEmail:
+    properties:
+      to?:
+        type: string[]
+        description: Overrides the configured compliance distribution list.
+      runStatus: string
+      runId: string
+      reportType: string
+      entityCode: string
+      entityName: string
+      periodDate: string
+      periodStart: string
+      periodEnd: string
+      sequenceNumber: integer
+      isRevision: boolean
+      revisionOfRunId?: string | nil
+      completedAt: string
+      currency: string
+      recordCount: integer
+      totalAmount: number
+      customerCount: integer
+      completenessOutcome: string
+      isNilReport: boolean
+      flagSummary: FlagLine[]
+      volumeDeviation: boolean
+      volumeDeviationPercent?: number | nil
+      submissionFileName: string
+      summaryFileName: string
+      fileChecksum: string
+      archiveFilePath: string
+      deliveryMethod:
+        enum: [ATTACHMENT, SECURE_LINK]
+      secureLink?: string | nil
+      secureLinkExpiresAt?: string | nil
+      attachments?: Attachment[]
+      dataWarnings?: string[]
+      aiSummary?: string | nil
+
+  Alert:
+    properties:
+      to?: string[]
+      severity:
+        enum: [CRITICAL, WARNING, INFO]
+      alertType:
+        type: string
+        example: COMPLETENESS_MISMATCH
+      title: string
+      runId?: string | nil
+      reportType?: string | nil
+      entityCode?: string | nil
+      periodStart?: string | nil
+      periodEnd?: string | nil
+      details: string
+      correlationId?: string | nil
+
+  SendResult:
+    properties:
+      status:
+        enum: [SENT]
+      recipients: string[]
+      subject: string
+      attachments: integer
+      sentAt: string
+
+/health:
+  get:
+    responses:
+      200:
+        body:
+          properties:
+            status: string
+
+/notifications/compliance-report:
+  post:
+    description: Sends the compliance officer notification (prescribed format) with attachments or a secure link.
+    body: ReportEmail
+    responses:
+      200:
+        body: SendResult
+      400:
+        body: Error
+      502:
+        body: Error
+
+/notifications/alert:
+  post:
+    description: Sends an operational alert (failed run, completeness mismatch, missed schedule, volume deviation, late flags).
+    body: Alert
+    responses:
+      200:
+        body: SendResult
+      400:
+        body: Error
+      502:
+        body: Error

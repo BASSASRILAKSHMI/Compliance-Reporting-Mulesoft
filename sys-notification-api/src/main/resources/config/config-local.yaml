@@ -1,0 +1,26 @@
+# sys-notification-api - LOCAL (Anypoint Studio)
+http:
+  port: "8084"
+
+api:
+  id: "0"
+
+smtp:
+  host: "smtp.gmail.com"
+  port: "587"
+  from: "srilakshmibassa14@gmail.com"
+  reconnect:
+    frequencyMs: "3000"
+    attempts: "2"
+  retry:
+    max: "3"
+    delayMs: "5000"
+
+# comma-separated lists; the PDF's {{compliance.distribution.list}}
+compliance:
+  distribution:
+    list: "bassasrilakshmi58@gmail.com"
+
+alerts:
+  distribution:
+    list: "bassasrilakshmi58@gmail.com"

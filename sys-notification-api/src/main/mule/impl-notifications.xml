@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:email="http://www.mulesoft.org/schema/mule/email"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ===================== POST /notifications/compliance-report ===================== -->
+    <sub-flow name="impl-send-compliance-report" doc:name="impl-send-compliance-report">
+        <ee:transform doc:name="Render prescribed email">
+            <ee:variables>
+                <ee:set-variable variableName="mail" resource="dwl/report-email.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <flow-ref name="send-mail" doc:name="send-mail" />
+    </sub-flow>
+
+    <!-- ===================== POST /notifications/alert ===================== -->
+    <sub-flow name="impl-send-alert" doc:name="impl-send-alert">
+        <ee:transform doc:name="Render alert email">
+            <ee:variables>
+                <ee:set-variable variableName="mail" resource="dwl/alert-email.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <flow-ref name="send-mail" doc:name="send-mail" />
+    </sub-flow>
+
+    <!-- ===================== shared SMTP send with retry ===================== -->
+    <sub-flow name="send-mail" doc:name="send-mail">
+        <choice doc:name="Any recipient?">
+            <when expression="#[isEmpty(vars.mail.to)]">
+                <set-variable variableName="appErrorCode" value="NO_RECIPIENTS" doc:name="code" />
+                <raise-error type="APP:BAD_REQUEST" doc:name="No recipients"
+                    description="No recipients: neither 'to' in the request nor a configured distribution list" />
+            </when>
+        </choice>
+        <ee:transform doc:name="Decode attachments">
+            <ee:variables>
+                <ee:set-variable variableName="mailAttachments"><![CDATA[%dw 2.0
+import fromBase64 from dw::core::Binaries
+output application/java
+---
+(vars.mail.attachments default []) reduce ((a, acc = {}) ->
+    acc ++ { (a.fileName): fromBase64(a.contentBase64) })]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <!-- transient SMTP failures are retried; a permanent failure surfaces as 502 -->
+        <until-successful maxRetries="${smtp.retry.max}" millisBetweenRetries="${smtp.retry.delayMs}" doc:name="Retry SMTP">
+                        <!-- list and map parameters taken from expressions must be attributes -->
+                        <!-- recipient list from an expression = attribute; attachments map = child element -->
+                        <!-- recipient list from an expression = attribute; attachments map = child element -->
+            <email:send config-ref="Compliance_SMTP_Config" doc:name="Send email"
+                subject="#[vars.mail.subject]"
+                toAddresses="#[vars.mail.to]">
+                <email:body contentType="text/plain" encoding="UTF-8">
+                    <email:content><![CDATA[#[vars.mail.body]]]></email:content>
+                </email:body>
+                <email:attachments><![CDATA[#[vars.mailAttachments]]]></email:attachments>
+            </email:send>
+        </until-successful>
+        <logger level="INFO" category="com.cbit.compliance.sys.notification" doc:name="Log sent"
+            message="#['EMAIL_SENT subject=' ++ vars.mail.subject ++ ' to=' ++ (vars.mail.to joinBy ',') ++ ' attachments=' ++ (sizeOf(vars.mailAttachments) as String)]" />
+        <ee:transform doc:name="SendResult">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  status:      "SENT",
+  recipients:  vars.mail.to,
+  subject:     vars.mail.subject,
+  attachments: sizeOf(vars.mailAttachments),
+  sentAt:      (now() >> "Asia/Kolkata") as String {format: "yyyy-MM-dd'T'HH:mm:ssxxx"}
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>
