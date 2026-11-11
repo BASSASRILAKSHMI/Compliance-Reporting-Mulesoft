@@ -1,0 +1,71 @@
+# prc-compliance-reporting-api - DEV (CloudHub 2.0, Sandbox)
+http:
+  port: "8081"
+api:
+  id: "REPLACE_WITH_API_MANAGER_INSTANCE_ID"
+
+# ---- system APIs (running locally in Studio) ----
+sysDb:
+  host: "REPLACE_WITH_SYS_DB_CLOUDHUB_HOST"
+  port: "443"
+  protocol: "HTTPS"
+  basePath: "/api"
+  timeoutMs: "60000"
+  retries: "2"
+  retryDelayMs: "2000"
+sysNotification:
+  host: "REPLACE_WITH_SYS_NOTIFICATION_CLOUDHUB_HOST"
+  port: "443"
+  protocol: "HTTPS"
+  basePath: "/api"
+  timeoutMs: "120000"
+
+# ---- FR1: nightly run after the 21:00 IST business-day cutoff ----
+schedule:
+  cron: "0 30 21 * * ?"
+  timeZone: "Asia/Kolkata"
+sentinel:
+  frequencyMinutes: "60"
+runLock:
+  ttlMinutes: "60"
+
+# ---- report definition ----
+report:
+  type: "STR"
+  entityCode: "ENT0091"
+  entityName: "Bright Financial Services Ltd"
+  currency: "INR"
+  cutoffTime: "21:00:00"
+  maxCatchUpPeriods: "7"
+  maxAmount: "99999999999.99"
+  missingCustomerPolicy: "PLACEHOLDER"   # PLACEHOLDER | FAIL  (NS 9)
+flags:
+  pageSize: "500"
+
+# ---- FR11 volume deviation ----
+deviation:
+  window: "7"
+  minHistory: "3"
+  thresholdPercent: "50"
+
+# ---- files (outside the Git repo) ----
+file:
+  workingDir: "/tmp/compliance-files"
+  outputDir: "output"
+  archiveDir: "archive"
+  reproduceDir: "reproduce"
+
+# ---- FR12 delivery ----
+email:
+  maxAttachmentBytes: "3000000"
+secureLink:
+  baseUrl: "REPLACE_WITH_EXP_API_PUBLIC_URL"
+  validHours: "24"
+
+# ---- advisory AI briefing (OpenAI-compatible endpoint) ----
+ai:
+  enabled: "true"
+  host: "api.groq.com"
+  path: "/openai/v1/chat/completions"
+  model: "llama-3.3-70b-versatile"
+  timeoutMs: "15000"

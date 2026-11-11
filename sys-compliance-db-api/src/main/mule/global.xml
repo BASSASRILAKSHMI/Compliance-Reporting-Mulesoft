@@ -54,6 +54,7 @@
                 <!-- TiDB Cloud requires TLS and a verified certificate -->
                 <db:connection-property key="sslMode" value="${db.sslMode}" />
                 <!-- every session runs in IST, so period boundaries are exact -->
+                <!-- named zone (not '+05:30'): a '+' in the JDBC URL is decoded as a space -->
                 <db:connection-property key="sessionVariables" value="time_zone='Asia/Kolkata'" />
                 <db:connection-property key="connectTimeout" value="10000" />
                 <db:connection-property key="socketTimeout" value="60000" />

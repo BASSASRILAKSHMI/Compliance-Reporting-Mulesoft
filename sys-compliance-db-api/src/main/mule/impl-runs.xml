@@ -11,7 +11,7 @@
 
     <!-- ===================== POST /runs ===================== -->
     <sub-flow name="impl-create-run" doc:name="impl-create-run">
-        <set-variable variableName="runId" value="#[payload.runId]" doc:name="runId" />
+        <set-variable variableName="runId" value="#[output application/java --- payload.runId]" doc:name="runId" />
         <db:insert config-ref="Compliance_Database_Config" doc:name="Insert run (STARTED)">
             <db:sql><![CDATA[
 INSERT INTO compliance_report_runs
@@ -37,14 +37,14 @@ VALUES
 }]]]></db:input-parameters>
         </db:insert>
         <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log run created"
-            message="#['run created runId=' ++ vars.runId]" />
+            message="#[output application/java --- 'run created runId=' ++ vars.runId]" />
         <flow-ref name="select-run-by-id" doc:name="select-run-by-id" />
         <set-variable variableName="httpStatus" value="201" doc:name="201 Created" />
     </sub-flow>
 
     <!-- ===================== GET /runs/{runId} ===================== -->
     <sub-flow name="impl-get-run" doc:name="impl-get-run">
-        <set-variable variableName="runId" value="#[attributes.uriParams.runId]" doc:name="runId" />
+        <set-variable variableName="runId" value="#[output application/java --- attributes.uriParams.runId]" doc:name="runId" />
         <flow-ref name="select-run-by-id" doc:name="select-run-by-id" />
     </sub-flow>
 
@@ -70,7 +70,7 @@ WHERE  run_id = :runId
         </db:select>
         <choice doc:name="Found?">
             <when expression="#[isEmpty(payload)]">
-                <raise-error type="APP:NOT_FOUND" description="#['Run not found: ' ++ (vars.runId default '')]" doc:name="Not found" />
+                <raise-error type="APP:NOT_FOUND" description="#[output application/java --- 'Run not found: ' ++ (vars.runId default '')]" doc:name="Not found" />
             </when>
         </choice>
         <ee:transform doc:name="Run">
@@ -129,7 +129,7 @@ payload map mapRun($)]]></ee:set-payload>
 
     <!-- ===================== PATCH /runs/{runId} ===================== -->
     <sub-flow name="impl-update-run" doc:name="impl-update-run">
-        <set-variable variableName="runId" value="#[attributes.uriParams.runId]" doc:name="runId" />
+        <set-variable variableName="runId" value="#[output application/java --- attributes.uriParams.runId]" doc:name="runId" />
         <!-- SUCCESS can only be set by /reports/finalize, inside the DB transaction -->
         <choice doc:name="SUCCESS via PATCH?">
             <when expression="#[payload.runStatus == 'SUCCESS']">
@@ -154,11 +154,11 @@ payload map mapRun($)]]></ee:set-payload>
         </db:update>
         <choice doc:name="Row updated?">
             <when expression="#[payload.affectedRows == 0]">
-                <raise-error type="APP:NOT_FOUND" description="#['Run not found: ' ++ vars.runId]" doc:name="Not found" />
+                <raise-error type="APP:NOT_FOUND" description="#[output application/java --- 'Run not found: ' ++ vars.runId]" doc:name="Not found" />
             </when>
         </choice>
         <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log update"
-            message="#['run updated runId=' ++ vars.runId ++ ' fields=' ++ write(keysOf(vars.runUpdate.params), 'application/json', {indent:false})]" />
+            message="#[output application/java --- 'run updated runId=' ++ vars.runId ++ ' fields=' ++ write(keysOf(vars.runUpdate.params), 'application/json', {indent:false})]" />
         <flow-ref name="select-run-by-id" doc:name="select-run-by-id" />
     </sub-flow>
 

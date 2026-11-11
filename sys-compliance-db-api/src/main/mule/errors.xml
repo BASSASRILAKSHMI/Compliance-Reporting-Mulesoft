@@ -55,12 +55,12 @@
         </on-error-propagate>
         <on-error-propagate type="APP:BAD_REQUEST" doc:name="400 business">
             <set-variable variableName="httpStatus" value="400" doc:name="Status 400" />
-            <set-variable variableName="errorCode" value="#[vars.appErrorCode default 'BAD_REQUEST']" doc:name="Code" />
+            <set-variable variableName="errorCode" value="#[output application/java --- vars.appErrorCode default 'BAD_REQUEST']" doc:name="Code" />
             <flow-ref name="build-error-response" doc:name="Build error" />
         </on-error-propagate>
         <on-error-propagate type="APP:CONFLICT" doc:name="409 conflict">
             <set-variable variableName="httpStatus" value="409" doc:name="Status 409" />
-            <set-variable variableName="errorCode" value="#[vars.appErrorCode default 'CONFLICT']" doc:name="Code" />
+            <set-variable variableName="errorCode" value="#[output application/java --- vars.appErrorCode default 'CONFLICT']" doc:name="Code" />
             <flow-ref name="build-error-response" doc:name="Build error" />
         </on-error-propagate>
 

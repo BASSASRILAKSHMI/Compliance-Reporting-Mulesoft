@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ======================================================================
+         FR1: nightly run after the business-day cutoff, in an explicit time zone.
+         maxConcurrency=1: a slow run can never overlap the next trigger.
+         ====================================================================== -->
+    <flow name="nightly-str-scheduler" doc:name="nightly-str-scheduler" maxConcurrency="1">
+        <scheduler doc:name="Nightly (cron, IST)">
+            <scheduling-strategy>
+                <cron expression="${schedule.cron}" timeZone="${schedule.timeZone}" />
+            </scheduling-strategy>
+        </scheduler>
+        <set-variable variableName="triggeredBy" value="SCHEDULER" doc:name="triggeredBy" />
+        <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log trigger"
+            message="#[output application/java --- 'SCHEDULER_FIRED cron=' ++ p('schedule.cron') ++ ' tz=' ++ p('schedule.timeZone') ++ ' correlationId=' ++ correlationId]" />
+        <try doc:name="Run">
+            <set-payload value="#[output application/java --- { mode: 'NEXT' }]" doc:name="mode NEXT" />
+            <flow-ref name="process-run-request" doc:name="process-run-request" />
+            <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log outcomes"
+                message="#[output application/java --- 'SCHEDULED_RUN_DONE ' ++ write(payload, 'application/json', {indent: false})]" />
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="Never crash the scheduler">
+                    <logger level="ERROR" category="com.cbit.compliance.prc" doc:name="Log error"
+                        message="#[output application/java --- 'SCHEDULED_RUN_ERROR ' ++ (error.errorType.identifier default '') ++ ': ' ++ (error.description default '')]" />
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </flow>
+
+    <!-- ======================================================================
+         Late-flag sentinel: flags confirmed after their period was reported.
+         Alerts once per distinct set (state kept in the Object Store).
+         ====================================================================== -->
+    <flow name="late-flag-sentinel" doc:name="late-flag-sentinel" maxConcurrency="1">
+        <scheduler doc:name="Every N minutes">
+            <scheduling-strategy>
+                <fixed-frequency frequency="${sentinel.frequencyMinutes}" timeUnit="MINUTES" startDelay="2" />
+            </scheduling-strategy>
+        </scheduler>
+        <try doc:name="Check">
+            <flow-ref name="ops-late-flags" doc:name="ops-late-flags" />
+            <ee:transform doc:name="Signature">
+                <ee:variables>
+                    <ee:set-variable variableName="late"><![CDATA[%dw 2.0
+import sha256Text from dwl::report
+output application/java
+var flags = payload
+---
+{
+  flags: flags,
+  signature: sha256Text((flags.flagSeq default []) map ($ as String) joinBy ","),
+  dates: (flags.businessDate default []) distinctBy $
+}]]></ee:set-variable>
+                </ee:variables>
+            </ee:transform>
+            <os:retrieve key="late-flag-signature" objectStore="Sentinel_State_Store" doc:name="Last alerted set" target="lastSignature">
+                <os:default-value>#['NONE']</os:default-value>
+            </os:retrieve>
+            <choice doc:name="New late flags?">
+                <when expression="#[not isEmpty(vars.late.flags) and (vars.lastSignature != vars.late.signature)]">
+                    <set-variable variableName="alert" doc:name="alert" value="#[output application/java --- {
+                        severity: 'WARNING', alertType: 'LATE_FLAGS',
+                        title: (sizeOf(vars.late.flags) as String) ++ ' flag(s) confirmed after their period was already reported',
+                        reportType: p('report.type'), entityCode: p('report.entityCode'),
+                        details: 'These flags will never be picked up by a normal run. Issue a revision for: ' ++ (vars.late.dates joinBy ', ')
+                          ++ '\n' ++ ((vars.late.flags map ('- ' ++ $.transactionId ++ ' ' ++ $.flagCode ++ ' flagged ' ++ $.flaggedAt ++ ' -> ' ++ $.action)) joinBy '\n') }]" />
+                    <flow-ref name="send-alert-safely" doc:name="send-alert-safely" />
+                    <os:store key="late-flag-signature" objectStore="Sentinel_State_Store" doc:name="Remember set">
+                        <os:value>#[vars.late.signature]</os:value>
+                    </os:store>
+                </when>
+            </choice>
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="Log only">
+                    <logger level="WARN" category="com.cbit.compliance.prc" doc:name="Sentinel error"
+                        message="#[output application/java --- 'Late-flag sentinel skipped: ' ++ (error.description default '')]" />
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </flow>
+</mule>

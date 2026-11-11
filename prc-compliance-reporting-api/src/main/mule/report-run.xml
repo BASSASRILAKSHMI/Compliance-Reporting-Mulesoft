@@ -1,0 +1,373 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:file="http://www.mulesoft.org/schema/mule/file"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ======================================================================
+         ENTRY: payload = { mode: NEXT | REVISION | REPRODUCE, reportDate?, originalRunId? }
+                vars.triggeredBy already set by the caller (scheduler or API)
+         OUT  : payload = RunOutcome[]
+         One run at a time: a lock in the Object Store serialises scheduler and manual runs.
+         ====================================================================== -->
+    <sub-flow name="process-run-request" doc:name="process-run-request">
+        <set-variable variableName="request" value="#[output application/java --- payload]" doc:name="request" />
+        <set-variable variableName="outcomes" value="#[output application/java --- []]" doc:name="outcomes = []" />
+        <flow-ref name="acquire-run-lock" doc:name="acquire-run-lock" />
+        <try doc:name="Holding the lock">
+            <choice doc:name="Mode">
+                <when expression="#[vars.request.mode == 'REVISION']">
+                    <flow-ref name="run-revision" doc:name="run-revision" />
+                </when>
+                <when expression="#[vars.request.mode == 'REPRODUCE']">
+                    <flow-ref name="run-reproduce" doc:name="run-reproduce" />
+                </when>
+                <otherwise>
+                    <flow-ref name="run-pending-periods" doc:name="run-pending-periods" />
+                </otherwise>
+            </choice>
+            <error-handler>
+                <on-error-propagate type="ANY" doc:name="Release and rethrow">
+                    <flow-ref name="release-run-lock" doc:name="release-run-lock" />
+                </on-error-propagate>
+            </error-handler>
+        </try>
+        <flow-ref name="release-run-lock" doc:name="release-run-lock" />
+        <set-payload value="#[output application/json --- vars.outcomes]" doc:name="RunOutcome[]" />
+    </sub-flow>
+
+    <!-- ================================ lock ================================ -->
+    <sub-flow name="acquire-run-lock" doc:name="acquire-run-lock">
+        <try doc:name="Store lock">
+            <os:store key="#['run-lock-' ++ p('report.type') ++ '-' ++ p('report.entityCode')]"
+                objectStore="Run_Lock_Store" failIfPresent="true" doc:name="Lock (fail if present)">
+                <os:value>#[output application/json --- { triggeredBy: vars.triggeredBy, since: now() as String, correlationId: correlationId }]</os:value>
+            </os:store>
+            <error-handler>
+                <on-error-propagate type="OS:KEY_ALREADY_EXISTS" doc:name="Another run active">
+                    <raise-error type="APP:RUN_IN_PROGRESS" doc:name="409"
+                        description="Another report run is in progress; duplicate run rejected (NS 5). Try again when it finishes." />
+                </on-error-propagate>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <sub-flow name="release-run-lock" doc:name="release-run-lock">
+        <try doc:name="Remove lock">
+            <os:remove key="#['run-lock-' ++ p('report.type') ++ '-' ++ p('report.entityCode')]"
+                objectStore="Run_Lock_Store" doc:name="Unlock" />
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="Already free" />
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- ======================================================================
+         NEXT: every closed, unreported period, oldest first (catch-up = NS 15)
+         ====================================================================== -->
+    <sub-flow name="run-pending-periods" doc:name="run-pending-periods">
+        <set-variable variableName="call" value="#[output application/java --- { path: '/control/' ++ p('report.type') ++ '/' ++ p('report.entityCode') }]" doc:name="call control" />
+        <flow-ref name="sysdb-get" doc:name="GET bookmark" />
+        <ee:transform doc:name="Pending periods">
+            <ee:variables>
+                <ee:set-variable variableName="pending"><![CDATA[%dw 2.0
+import pendingPeriods, nowIst from dwl::report
+output application/java
+---
+pendingPeriods(payload.lastReportedUpto, nowIst(), p('report.cutoffTime'), p('report.maxCatchUpPeriods') as Number)]]></ee:set-variable>
+                <ee:set-variable variableName="bookmark"><![CDATA[%dw 2.0
+output application/java
+---
+payload.lastReportedUpto]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <choice doc:name="Anything to report?">
+            <when expression="#[isEmpty(vars.pending)]">
+                <set-variable variableName="outcomes" doc:name="NOTHING_TO_REPORT"
+                    value="#[output application/java --- [{ outcome: 'NOTHING_TO_REPORT', message: 'All closed periods are reported. Bookmark: ' ++ vars.bookmark ++ '. The next period closes at the ' ++ p('report.cutoffTime') ++ ' IST cutoff.' }]]" />
+            </when>
+            <otherwise>
+                <choice doc:name="Missed schedule?">
+                    <when expression="#[sizeOf(vars.pending) &gt; 1]">
+                        <set-variable variableName="alert" doc:name="alert" value="#[output application/java --- {
+                            severity: 'WARNING', alertType: 'MISSED_SCHEDULE',
+                            title: (sizeOf(vars.pending) as String) ++ ' reporting periods were not reported on time - catching up now',
+                            reportType: p('report.type'), entityCode: p('report.entityCode'),
+                            periodStart: vars.pending[0].periodStart, periodEnd: vars.pending[-1].periodEnd,
+                            details: 'Unreported business dates: ' ++ (vars.pending.reportDate joinBy ', ') ++ '. Each will be reported in order; the gap is recorded in the run history (triggered_by = ' ++ vars.triggeredBy ++ ').' }]" />
+                        <flow-ref name="send-alert-safely" doc:name="send-alert-safely" />
+                    </when>
+                </choice>
+                <set-variable variableName="stopCatchUp" value="#[output application/java --- false]" doc:name="stopCatchUp = false" />
+                <foreach collection="#[vars.pending]" doc:name="For each pending period">
+                    <choice doc:name="Earlier period failed?">
+                        <when expression="#[not vars.stopCatchUp]">
+                            <set-variable variableName="period" value="#[output application/java --- payload]" doc:name="period" />
+                            <set-variable variableName="issue" doc:name="issue options" value="#[output application/java --- {
+                                isRevision: false, revisionOfRunId: null, flagMode: 'PENDING', advanceControl: true }]" />
+                            <try doc:name="Issue one period">
+                                <flow-ref name="issue-report" doc:name="issue-report" />
+                                <set-variable variableName="outcomes" value="#[output application/java --- vars.outcomes ++ [vars.outcome]]" doc:name="add outcome" />
+                                <error-handler>
+                                    <!-- periods must be reported in order: stop after the first failure -->
+                                    <on-error-continue type="ANY" doc:name="Record failure, stop">
+                                        <set-variable variableName="outcomes" value="#[output application/java --- vars.outcomes ++ [vars.failure default { outcome: 'FAILED', errorMessage: error.description }]]" doc:name="add failure" />
+                                        <set-variable variableName="stopCatchUp" value="#[output application/java --- true]" doc:name="stopCatchUp" />
+                                    </on-error-continue>
+                                </error-handler>
+                            </try>
+                        </when>
+                    </choice>
+                </foreach>
+            </otherwise>
+        </choice>
+    </sub-flow>
+
+    <!-- ======================================================================
+         REVISION: re-issue an already reported date with the next sequence (NS 4)
+         ====================================================================== -->
+    <sub-flow name="run-revision" doc:name="run-revision">
+        <choice doc:name="reportDate given?">
+            <when expression="#[isEmpty(vars.request.reportDate)]">
+                <raise-error type="APP:BAD_REQUEST" description="reportDate is required for a REVISION" doc:name="400" />
+            </when>
+        </choice>
+        <ee:transform doc:name="Period of that date">
+            <ee:variables>
+                <ee:set-variable variableName="period"><![CDATA[%dw 2.0
+import revisionPeriod from dwl::report
+output application/java
+---
+revisionPeriod(vars.request.reportDate as String, p('report.cutoffTime'))]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="call" value="#[output application/java --- { path: '/control/' ++ p('report.type') ++ '/' ++ p('report.entityCode') }]" doc:name="call control" />
+        <flow-ref name="sysdb-get" doc:name="GET bookmark" />
+        <choice doc:name="Already reported?">
+            <when expression="#[(payload.lastReportedUpto as LocalDateTime {format: 'yyyy-MM-dd HH:mm:ss'}) &lt; (vars.period.periodEnd as LocalDateTime {format: 'yyyy-MM-dd HH:mm:ss'})]">
+                <raise-error type="APP:CONFLICT" doc:name="409"
+                    description="#[output application/java --- 'Business date ' ++ vars.period.reportDate ++ ' has not been reported yet - use mode NEXT, not REVISION']" />
+            </when>
+        </choice>
+        <set-variable variableName="call" doc:name="call original"
+            value="#[output application/java --- { path: '/runs', query: { reportDate: vars.period.reportDate, status: 'SUCCESS', limit: 1 } }]" />
+        <flow-ref name="sysdb-get" doc:name="GET latest issued run" />
+        <set-variable variableName="issue" doc:name="issue options" value="#[output application/java --- {
+            isRevision: true, revisionOfRunId: payload[0].runId default null, flagMode: 'ALL', advanceControl: false }]" />
+        <try doc:name="Issue revision">
+            <flow-ref name="issue-report" doc:name="issue-report" />
+            <set-variable variableName="outcomes" value="#[output application/java --- [vars.outcome]]" doc:name="outcome" />
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="Return failure outcome">
+                    <set-variable variableName="outcomes" value="#[output application/java --- [vars.failure default { outcome: 'FAILED', errorMessage: error.description }]]" doc:name="failure" />
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <!-- ======================================================================
+         REPRODUCE: rebuild an issued report from its own data; prove byte-identity (FR7)
+         Nothing is archived, emailed or finalised.
+         ====================================================================== -->
+    <sub-flow name="run-reproduce" doc:name="run-reproduce">
+        <choice doc:name="originalRunId given?">
+            <when expression="#[isEmpty(vars.request.originalRunId)]">
+                <raise-error type="APP:BAD_REQUEST" description="originalRunId is required for REPRODUCE" doc:name="400" />
+            </when>
+        </choice>
+        <set-variable variableName="call" value="#[output application/java --- { path: '/runs/' ++ vars.request.originalRunId }]" doc:name="call run" />
+        <flow-ref name="sysdb-get" doc:name="GET original run" />
+        <set-variable variableName="original" value="#[output application/java --- payload]" doc:name="original" />
+        <choice doc:name="Issued?">
+            <when expression="#[vars.original.runStatus != 'SUCCESS']">
+                <raise-error type="APP:CONFLICT" doc:name="409"
+                    description="#[output application/java --- 'Run ' ++ vars.original.runId ++ ' did not issue a report (status ' ++ vars.original.runStatus ++ ')']" />
+            </when>
+        </choice>
+        <ee:transform doc:name="Same inputs as the original">
+            <ee:variables>
+                <ee:set-variable variableName="ctx"><![CDATA[%dw 2.0
+output application/java
+var o = vars.original
+---
+{
+  entityCode: o.entityCode, entityName: p('report.entityName'), reportType: o.reportType, currency: p('report.currency'),
+  reportDate: o.reportDate, periodStart: o.periodStart, periodEnd: o.periodEnd,
+  sequenceNumber: o.sequenceNumber, isRevision: o.isRevision,
+  generatedAt: o.startedAt
+}]]></ee:set-variable>
+                <!-- an original report = exactly the flags it marked; a revision = every flag of its window -->
+                <ee:set-variable variableName="flagMode"><![CDATA[%dw 2.0
+output application/java
+---
+if (vars.original.isRevision) 'ALL' else 'RUN']]></ee:set-variable>
+                <ee:set-variable variableName="flagRunId"><![CDATA[%dw 2.0
+output application/java
+---
+vars.original.runId]]></ee:set-variable>
+                <ee:set-variable variableName="outDir"><![CDATA[%dw 2.0
+output application/java
+---
+p('file.reproduceDir')]]></ee:set-variable>
+                <ee:set-variable variableName="runId"><![CDATA[%dw 2.0
+output application/java
+---
+'REPRO-' ++ vars.original.runId]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <flow-ref name="build-report-file" doc:name="build-report-file" />
+        <set-variable variableName="outcomes" doc:name="REPRODUCED" value="#[output application/java --- [{
+            outcome: 'REPRODUCED', runId: vars.original.runId, reportDate: vars.ctx.reportDate,
+            periodStart: vars.ctx.periodStart, periodEnd: vars.ctx.periodEnd, sequenceNumber: vars.ctx.sequenceNumber,
+            isRevision: vars.ctx.isRevision, recordCount: vars.ctx.recordCount, fileName: vars.ctx.fileName,
+            originalChecksum: vars.original.fileChecksum, regeneratedChecksum: vars.ctx.fileChecksum,
+            identical: vars.original.fileChecksum == vars.ctx.fileChecksum,
+            message: if (vars.original.fileChecksum == vars.ctx.fileChecksum) 'Regenerated file is byte-identical to the issued report'
+                     else 'Regenerated file DIFFERS from the issued report - investigate' }]]" />
+        <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log reproduce"
+            message="#[output application/java --- 'REPRODUCE runId=' ++ vars.original.runId ++ ' identical=' ++ (vars.outcomes[0].identical as String)]" />
+    </sub-flow>
+
+    <!-- ======================================================================
+         ISSUE ONE REPORT
+         in : vars.period { periodStart, periodEnd, reportDate },
+              vars.issue  { isRevision, revisionOfRunId, flagMode, advanceControl }, vars.triggeredBy
+         out: vars.outcome  (or vars.failure + error propagated)
+         The bookmark moves only in the very last step, in one DB transaction (FR15).
+         ====================================================================== -->
+    <sub-flow name="issue-report" doc:name="issue-report">
+        <ee:transform doc:name="New run id">
+            <ee:variables>
+                <ee:set-variable variableName="runId"><![CDATA[%dw 2.0
+output application/java
+---
+"RUN-" ++ ((now() >> "Asia/Kolkata") as String {format: "yyyyMMdd-HHmmss"}) ++ "-" ++ (uuid() replace "-" with "")[0 to 5]]]></ee:set-variable>
+                <ee:set-variable variableName="revisionOfRunId"><![CDATA[%dw 2.0
+output application/java
+---
+vars.issue.revisionOfRunId]]></ee:set-variable>
+                <ee:set-variable variableName="flagMode"><![CDATA[%dw 2.0
+output application/java
+---
+vars.issue.flagMode]]></ee:set-variable>
+                <ee:set-variable variableName="flagRunId"><![CDATA[%dw 2.0
+output application/java
+---
+'']]></ee:set-variable>
+                <ee:set-variable variableName="outDir"><![CDATA[%dw 2.0
+output application/java
+---
+p('file.outputDir')]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="call" doc:name="call create run" value="#[output application/java --- { method: 'POST', path: '/runs', body: {
+            runId: vars.runId, reportType: p('report.type'), entityCode: p('report.entityCode'),
+            reportDate: vars.period.reportDate, periodStart: vars.period.periodStart, periodEnd: vars.period.periodEnd,
+            isRevision: vars.issue.isRevision, revisionOfRunId: vars.issue.revisionOfRunId,
+            triggeredBy: vars.triggeredBy, correlationId: correlationId } }]" />
+        <flow-ref name="sysdb-send" doc:name="POST /runs (STARTED)" />
+        <set-variable variableName="run" value="#[output application/java --- payload]" doc:name="run" />
+        <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log start"
+            message="#[output application/java --- 'RUN_STARTED runId=' ++ vars.runId ++ ' date=' ++ vars.period.reportDate ++ ' revision=' ++ (vars.issue.isRevision as String) ++ ' by=' ++ vars.triggeredBy]" />
+
+        <try doc:name="Issue pipeline">
+            <!-- sequence: 001 for an original, 002+ for revisions (FR8) -->
+            <set-variable variableName="call" value="#[output application/java --- { path: '/sequences/next', query: { periodStart: vars.period.periodStart } }]" doc:name="call sequence" />
+            <flow-ref name="sysdb-get" doc:name="GET next sequence" />
+            <set-variable variableName="ctx" doc:name="report context" value="#[output application/java --- {
+                entityCode: p('report.entityCode'), entityName: p('report.entityName'),
+                reportType: p('report.type'), currency: p('report.currency'),
+                reportDate: vars.period.reportDate, periodStart: vars.period.periodStart, periodEnd: vars.period.periodEnd,
+                sequenceNumber: payload.nextSequence, isRevision: vars.issue.isRevision,
+                generatedAt: vars.run.startedAt }]" />
+
+            <flow-ref name="build-report-file" doc:name="build-report-file" />
+            <flow-ref name="archive-report" doc:name="archive-report" />
+            <flow-ref name="analyse-report" doc:name="analyse-report" />
+            <flow-ref name="deliver-report" doc:name="deliver-report" />
+
+            <!-- one DB transaction: flags REPORTED + run SUCCESS + bookmark -->
+            <set-variable variableName="call" doc:name="call finalize" value="#[output application/java --- { method: 'POST', path: '/reports/finalize', body: {
+                runId: vars.runId, reportType: vars.ctx.reportType, entityCode: vars.ctx.entityCode,
+                periodStart: vars.ctx.periodStart, periodEnd: vars.ctx.periodEnd, sequenceNumber: vars.ctx.sequenceNumber,
+                flagMode: vars.flagMode,
+                expectedFlagUpdates: if (vars.flagMode == 'ALL') (vars.expected.pendingCount default 0) else vars.ctx.recordCount,
+                advanceControl: vars.issue.advanceControl } }]" />
+            <flow-ref name="sysdb-send" doc:name="POST /reports/finalize" />
+
+            <set-variable variableName="outcome" doc:name="SUCCESS outcome" value="#[output application/java --- {
+                outcome: 'SUCCESS', runId: vars.runId, reportDate: vars.ctx.reportDate,
+                periodStart: vars.ctx.periodStart, periodEnd: vars.ctx.periodEnd,
+                sequenceNumber: vars.ctx.sequenceNumber, isRevision: vars.ctx.isRevision,
+                recordCount: vars.ctx.recordCount, totalAmount: vars.ctx.totalAmount, customerCount: vars.ctx.customerCount,
+                isNilReport: vars.ctx.isNil, fileName: vars.ctx.fileName, fileChecksum: vars.ctx.fileChecksum,
+                chainHash: vars.chain.chainHash, deliveryMethod: vars.delivery.method,
+                volumeDeviationPct: vars.deviation.pct, warnings: vars.ctx.warnings }]" />
+            <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log success"
+                message="#[output application/java --- 'RUN_SUCCESS runId=' ++ vars.runId ++ ' file=' ++ vars.ctx.fileName ++ ' records=' ++ (vars.ctx.recordCount as String)]" />
+
+            <error-handler>
+                <on-error-propagate type="ANY" doc:name="Run failed">
+                    <ee:transform doc:name="Error info">
+                        <ee:variables>
+                            <ee:set-variable variableName="errInfo" resource="dwl/error-info.dwl" />
+                        </ee:variables>
+                    </ee:transform>
+                    <set-variable variableName="failure" doc:name="failure outcome" value="#[output application/java --- {
+                        outcome: 'FAILED', runId: vars.runId, reportDate: vars.period.reportDate,
+                        periodStart: vars.period.periodStart, periodEnd: vars.period.periodEnd,
+                        errorCode: vars.errInfo.code, errorMessage: vars.errInfo.message }]" />
+                    <logger level="ERROR" category="com.cbit.compliance.prc" doc:name="Log failure"
+                        message="#[output application/java --- 'RUN_FAILED runId=' ++ vars.runId ++ ' code=' ++ vars.errInfo.code ++ ' : ' ++ vars.errInfo.message]" />
+                    <!-- audit record: FAILED, bookmark untouched -->
+                    <try doc:name="Mark run FAILED">
+                        <set-variable variableName="call" doc:name="call patch" value="#[output application/java --- { method: 'PATCH', path: '/runs/' ++ vars.runId, body: {
+                            runStatus: 'FAILED', errorCode: vars.errInfo.code, errorMessage: vars.errInfo.message,
+                            completenessOk: vars.completeness.ok default false,
+                            completedAt: (now() >> 'Asia/Kolkata') as String {format: 'yyyy-MM-dd HH:mm:ss'} } }]" />
+                        <flow-ref name="sysdb-send" doc:name="PATCH run FAILED" />
+                        <error-handler>
+                            <on-error-continue type="ANY" doc:name="Log only">
+                                <logger level="ERROR" category="com.cbit.compliance.prc" doc:name="Patch failed"
+                                    message="#[output application/java --- 'Could not record FAILED status for ' ++ vars.runId ++ ': ' ++ (error.description default '')]" />
+                            </on-error-continue>
+                        </error-handler>
+                    </try>
+                    <!-- a report that was not issued must not be left in the output folder -->
+                    <flow-ref name="discard-unissued-output" doc:name="discard-unissued-output" />
+                    <set-variable variableName="alert" doc:name="alert" value="#[output application/java --- {
+                        severity: 'CRITICAL', alertType: 'RUN_FAILED_' ++ vars.errInfo.code,
+                        title: 'Regulatory report for ' ++ vars.period.reportDate ++ ' was NOT issued',
+                        runId: vars.runId, reportType: p('report.type'), entityCode: p('report.entityCode'),
+                        periodStart: vars.period.periodStart, periodEnd: vars.period.periodEnd,
+                        details: vars.errInfo.message }]" />
+                    <flow-ref name="send-alert-safely" doc:name="send-alert-safely" />
+                </on-error-propagate>
+            </error-handler>
+        </try>
+    </sub-flow>
+
+    <sub-flow name="discard-unissued-output" doc:name="discard-unissued-output">
+        <try doc:name="Delete submission">
+            <file:delete config-ref="Report_File_Config" path="#[vars.paths.submission]" doc:name="Delete submission" />
+            <error-handler><on-error-continue type="ANY" doc:name="Ignore" /></error-handler>
+        </try>
+        <try doc:name="Delete summary">
+            <file:delete config-ref="Report_File_Config" path="#[vars.paths.summary]" doc:name="Delete summary" />
+            <error-handler><on-error-continue type="ANY" doc:name="Ignore" /></error-handler>
+        </try>
+        <try doc:name="Delete work file">
+            <file:delete config-ref="Report_File_Config" path="#[vars.paths.details]" doc:name="Delete work file" />
+            <error-handler><on-error-continue type="ANY" doc:name="Ignore" /></error-handler>
+        </try>
+    </sub-flow>
+</mule>

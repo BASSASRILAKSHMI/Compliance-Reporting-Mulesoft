@@ -1,0 +1,145 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ===================== health of this API and its dependencies ===================== -->
+    <sub-flow name="ops-health" doc:name="ops-health">
+        <set-variable variableName="dbHealth" value="DOWN" doc:name="dbHealth" />
+        <set-variable variableName="notifyHealth" value="DOWN" doc:name="notifyHealth" />
+        <try doc:name="sys-db">
+            <http:request config-ref="Sys_DB_API_Config" method="GET" path="/health" responseTimeout="5000" doc:name="GET sys-db /health" />
+            <set-variable variableName="dbHealth" value="#[output application/java --- if (payload.database == 'UP') 'UP' else 'DEGRADED']" doc:name="dbHealth" />
+            <error-handler><on-error-continue type="ANY" doc:name="DOWN" /></error-handler>
+        </try>
+        <try doc:name="sys-notification">
+            <http:request config-ref="Sys_Notification_API_Config" method="GET" path="/health" responseTimeout="5000" doc:name="GET sys-notification /health" />
+            <set-variable variableName="notifyHealth" value="UP" doc:name="notifyHealth" />
+            <error-handler><on-error-continue type="ANY" doc:name="DOWN" /></error-handler>
+        </try>
+        <set-payload doc:name="Health"
+            value="#[output application/json --- { status: if (vars.dbHealth == 'UP' and vars.notifyHealth == 'UP') 'UP' else 'DEGRADED', sysDb: vars.dbHealth, sysNotification: vars.notifyHealth }]" />
+    </sub-flow>
+
+    <!-- ===================== late flags with the business date to revise ===================== -->
+    <sub-flow name="ops-late-flags" doc:name="ops-late-flags">
+        <set-variable variableName="call" doc:name="call"
+            value="#[output application/java --- { path: '/flags/late', query: { reportType: p('report.type'), entityCode: p('report.entityCode') } }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /flags/late" />
+        <ee:transform doc:name="Add business date">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+import nextCutoff, ts from dwl::report
+output application/json
+---
+payload map ($ ++ {
+  businessDate: (ts(nextCutoff($.flaggedAt, p('report.cutoffTime'))) as Date) as String,
+  action: "POST /runs {\"mode\":\"REVISION\",\"reportDate\":\"" ++ ((ts(nextCutoff($.flaggedAt, p('report.cutoffTime'))) as Date) as String) ++ "\"}"
+})]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== is this file one we issued? ===================== -->
+    <sub-flow name="ops-verify-file" doc:name="ops-verify-file">
+        <ee:transform doc:name="Checksum of the presented file">
+            <ee:variables>
+                <ee:set-variable variableName="presented"><![CDATA[%dw 2.0
+import fromBase64 from dw::core::Binaries
+import sha256Hex from dwl::report
+output application/java
+---
+{
+  fileName: payload.fileName,
+  checksum: sha256Hex(fromBase64((payload.contentBase64 default "") replace /\s+/ with ""))
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="call" doc:name="call"
+            value="#[output application/java --- { path: '/archive', query: if (isEmpty(vars.presented.fileName)) {} else { fileName: vars.presented.fileName } }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /archive" />
+        <ee:transform doc:name="VerifyResult">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var match = (payload filter ($.checksum == vars.presented.checksum))[0]
+---
+{
+  verified:   match != null,
+  checksum:   vars.presented.checksum,
+  fileName:   match.fileName,
+  runId:      match.runId,
+  fileType:   match.fileType,
+  archivedAt: match.createdAt,
+  message: if (match != null) "Byte-for-byte identical to the archived " ++ match.fileType ++ " of run " ++ match.runId
+           else if (not isEmpty(vars.presented.fileName) and not isEmpty(payload))
+             "NOT VERIFIED - a file named " ++ vars.presented.fileName ++ " was issued, but these bytes differ from it (modified or corrupted)"
+           else "NOT VERIFIED - no archived report has this checksum"
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+
+    <!-- ===================== re-hash every archived file and walk the chain ===================== -->
+    <sub-flow name="ops-verify-chain" doc:name="ops-verify-chain">
+        <set-variable variableName="call" doc:name="call"
+            value="#[output application/java --- { path: '/chain', query: { reportType: p('report.type'), entityCode: p('report.entityCode') } }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /chain" />
+        <set-variable variableName="links" value="#[output application/java --- payload]" doc:name="links" />
+        <set-variable variableName="archiveSums" value="#[output application/java --- {}]" doc:name="archiveSums" />
+        <foreach collection="#[vars.links]" doc:name="For each issued report">
+            <set-variable variableName="linkRunId" value="#[output application/java --- payload.runId]" doc:name="linkRunId" />
+            <try doc:name="Re-hash archived bytes">
+                <set-variable variableName="call" value="#[output application/java --- { path: '/archive/' ++ vars.linkRunId ++ '/SUBMISSION' }]" doc:name="call" />
+                <flow-ref name="sysdb-get" doc:name="GET archived submission" />
+                <ee:transform doc:name="add sum">
+                    <ee:variables>
+                        <ee:set-variable variableName="archiveSums"><![CDATA[%dw 2.0
+import fromBase64 from dw::core::Binaries
+import sha256Hex from dwl::report
+output application/java
+---
+vars.archiveSums ++ { (vars.linkRunId): sha256Hex(fromBase64(payload.contentBase64)) }]]></ee:set-variable>
+                    </ee:variables>
+                </ee:transform>
+                <error-handler>
+                    <on-error-continue type="ANY" doc:name="Missing archive">
+                        <set-variable variableName="archiveSums" value="#[output application/java --- vars.archiveSums ++ { (vars.linkRunId): 'MISSING' }]" doc:name="missing" />
+                    </on-error-continue>
+                </error-handler>
+            </try>
+        </foreach>
+        <ee:transform doc:name="Verify chain">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+import chainHash from dwl::report
+output application/json
+var links = vars.links
+var known = links.chainHash default []
+var details = links map ((l) -> {
+  runId:          l.runId,
+  reportDate:     l.reportDate,
+  sequenceNumber: l.sequenceNumber,
+  archiveIntact:  vars.archiveSums[l.runId] == l.fileChecksum,
+  linkIntact:     chainHash(l.prevChainHash, l.fileChecksum) == l.chainHash,
+  connected:      (l.prevChainHash == "GENESIS") or (known contains l.prevChainHash)
+})
+var broken = details filter (not ($.archiveIntact and $.linkIntact and $.connected))
+var genesisCount = sizeOf(links filter ($.prevChainHash == "GENESIS"))
+---
+{
+  valid:        isEmpty(broken) and (isEmpty(links) or genesisCount == 1),
+  linksChecked: sizeOf(links),
+  brokenAt:     broken[0].runId,
+  details:      details
+}]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>

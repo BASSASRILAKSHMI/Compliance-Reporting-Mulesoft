@@ -1,0 +1,5 @@
+# MUnit only - plain values are read as-is
+ai:
+  apiKey: "munit"
+secureLink:
+  secret: "munit-secret"

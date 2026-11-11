@@ -1,0 +1,173 @@
+#%RAML 1.0
+title: prc-compliance-reporting-api
+version: v1
+description: |
+  Process API that orchestrates the daily Suspicious Transaction Report (STR):
+  period control, paged extraction, completeness check, validation, H/D/T file,
+  summary, checksums, hash chain, immutable archive, delivery and finalisation.
+  Runs nightly from its own scheduler; these endpoints allow manual operation.
+mediaType: application/json
+baseUri: http://localhost:8082/api
+
+types:
+  Error:
+    properties:
+      errorCode: string
+      message: string
+      correlationId?: string
+
+  RunRequest:
+    properties:
+      mode:
+        enum: [NEXT, REVISION, REPRODUCE]
+        description: |
+          NEXT      = report every closed, unreported period (same as the nightly scheduler, with catch-up)
+          REVISION  = re-issue an already reported date with the next sequence (002, 003 ...)
+          REPRODUCE = regenerate an issued report from its own data and prove it is byte-identical
+      reportDate?:
+        type: date-only
+        description: Required for REVISION.
+      originalRunId?:
+        type: string
+        description: Required for REPRODUCE.
+      triggeredBy?:
+        type: string
+        description: Operator name, recorded in the audit trail as user:<name>.
+
+  RunOutcome:
+    properties:
+      outcome:
+        enum: [SUCCESS, FAILED, NOTHING_TO_REPORT, REPRODUCED]
+      runId?: string | nil
+      reportDate?: string | nil
+      periodStart?: string | nil
+      periodEnd?: string | nil
+      sequenceNumber?: integer | nil
+      isRevision?: boolean | nil
+      recordCount?: integer | nil
+      totalAmount?: number | nil
+      customerCount?: integer | nil
+      isNilReport?: boolean | nil
+      fileName?: string | nil
+      fileChecksum?: string | nil
+      chainHash?: string | nil
+      deliveryMethod?: string | nil
+      volumeDeviationPct?: number | nil
+      warnings?: string[]
+      errorCode?: string | nil
+      errorMessage?: string | nil
+      originalChecksum?: string | nil
+      regeneratedChecksum?: string | nil
+      identical?: boolean | nil
+      message?: string | nil
+
+  VerifyRequest:
+    properties:
+      fileName?: string
+      contentBase64: string
+
+  VerifyResult:
+    properties:
+      verified: boolean
+      checksum: string
+      fileName?: string | nil
+      runId?: string | nil
+      fileType?: string | nil
+      archivedAt?: string | nil
+      message: string
+
+  ChainCheck:
+    properties:
+      valid: boolean
+      linksChecked: integer
+      brokenAt?: string | nil
+      details: any[]
+
+/health:
+  get:
+    responses:
+      200:
+        body:
+          properties:
+            status: string
+            sysDb: string
+            sysNotification: string
+
+/runs:
+  post:
+    description: Manual trigger (re-run, revision, reproduction). Serialised with the scheduler by a run lock.
+    body: RunRequest
+    responses:
+      200:
+        body: RunOutcome[]
+      400:
+        body: Error
+      409:
+        body: Error
+  get:
+    queryParameters:
+      status:
+        type: string
+        required: false
+      reportDate:
+        type: date-only
+        required: false
+      limit:
+        type: integer
+        default: 30
+        required: false
+    responses:
+      200:
+        body: any[]
+
+/runs/{runId}:
+  get:
+    responses:
+      200:
+        body: any
+      404:
+        body: Error
+
+/late-flags:
+  get:
+    description: Flags confirmed after their period was already reported (candidates for a revision).
+    responses:
+      200:
+        body: any[]
+
+/archive:
+  get:
+    queryParameters:
+      fileName:
+        type: string
+        required: false
+      runId:
+        type: string
+        required: false
+    responses:
+      200:
+        body: any[]
+
+/archive/{runId}/{fileType}:
+  get:
+    description: Exact archived bytes (base64), as stored at issue time.
+    responses:
+      200:
+        body: any
+      404:
+        body: Error
+
+/verify:
+  post:
+    description: Is this file byte-for-byte a report we issued? Compares its SHA-256 with the archive.
+    body: VerifyRequest
+    responses:
+      200:
+        body: VerifyResult
+
+/chain/verify:
+  get:
+    description: Re-hashes every archived submission file and walks the hash chain from GENESIS.
+    responses:
+      200:
+        body: ChainCheck

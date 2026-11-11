@@ -63,7 +63,7 @@
         </munit:behavior>
         <munit:execution>
             <flow-ref name="test-report-request" />
-            <set-payload value="#[payload ++ {deliveryMethod: 'SECURE_LINK', secureLink: 'https://x/download?t=abc', secureLinkExpiresAt: '2026-11-11T21:30:00+05:30'}]" />
+            <set-payload value="#[(payload - 'deliveryMethod' - 'attachments') ++ {deliveryMethod: 'SECURE_LINK', secureLink: 'https://x/download?t=abc', secureLinkExpiresAt: '2026-11-11T21:30:00+05:30', attachments: []}]" />
             <flow-ref name="impl-send-compliance-report" />
         </munit:execution>
         <munit:validation>
@@ -80,7 +80,7 @@
         </munit:behavior>
         <munit:execution>
             <flow-ref name="test-report-request" />
-            <set-payload value="#[payload ++ {isNilReport: true, recordCount: 0, totalAmount: 0, customerCount: 0, flagSummary: []}]" />
+            <set-payload value="#[(payload - 'isNilReport' - 'recordCount' - 'totalAmount' - 'customerCount' - 'flagSummary') ++ {isNilReport: true, recordCount: 0, totalAmount: 0, customerCount: 0, flagSummary: []}]" />
             <flow-ref name="impl-send-compliance-report" />
         </munit:execution>
         <munit:validation>

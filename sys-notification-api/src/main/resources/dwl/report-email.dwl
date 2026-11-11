@@ -91,5 +91,6 @@ var sections = [
   to:      toList,
   subject: subject,
   body:    lines(sections),
-  attachments: if ((r.deliveryMethod default "ATTACHMENT") == "ATTACHMENT") (r.attachments default []) else []
+  // the caller decides what to attach (in SECURE_LINK mode it sends only the small summary)
+  attachments: r.attachments default []
 }

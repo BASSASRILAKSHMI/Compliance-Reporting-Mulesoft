@@ -1,0 +1,7 @@
+# Encrypted with the Mule Secure Properties Tool (AES / CBC), same key as the other apps.
+# ai.apiKey          = Groq API key (gsk_...)
+# secureLink.secret  = any long random string; the SAME value goes into exp-compliance-api
+ai:
+  apiKey: "![Ti8tkffE/MsPPYiLdUoJb+MTJsnwtrQH5hXvzcua3RYItpqFGLQlkNq4a1clKF0WixCRpQp4rBjfLEN0r9Dfig==]"
+secureLink:
+  secret: "![do5s5rM5JjzAG4UwftpMoahaKXTCtlxi3iSX0Li1xw4=]"

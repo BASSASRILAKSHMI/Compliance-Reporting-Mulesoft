@@ -1,0 +1,193 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:file="http://www.mulesoft.org/schema/mule/file"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ======================================================================
+         ARCHIVE (FR8, NS 6): File connector copy (CREATE_NEW) + durable DB copy (insert-only)
+         ====================================================================== -->
+    <sub-flow name="archive-report" doc:name="archive-report">
+        <set-variable variableName="ctx" value="#[output application/java --- vars.ctx ++ { archivePath: vars.paths.archiveDir ++ '/' ++ vars.ctx.fileName }]" doc:name="archive path" />
+        <try doc:name="Archive files (never overwrite)">
+            <file:write config-ref="Report_File_Config" path="#[vars.ctx.archivePath]" mode="CREATE_NEW"
+                createParentDirectories="true" doc:name="Archive submission">
+                <file:content>#[vars.fileBytes]</file:content>
+            </file:write>
+            <file:write config-ref="Report_File_Config" path="#[vars.paths.archiveDir ++ '/' ++ vars.ctx.summaryFileName]" mode="CREATE_NEW"
+                createParentDirectories="true" doc:name="Archive summary">
+                <file:content>#[vars.summaryBytes]</file:content>
+            </file:write>
+            <error-handler>
+                <on-error-propagate type="FILE:FILE_ALREADY_EXISTS" doc:name="Overwrite attempt">
+                    <logger level="WARN" category="com.cbit.compliance.prc.audit" doc:name="AUDIT rejected"
+                        message="#[output application/java --- 'ARCHIVE_OVERWRITE_REJECTED path=' ++ vars.ctx.archivePath ++ ' runId=' ++ vars.runId]" />
+                    <raise-error type="APP:ARCHIVE_EXISTS" doc:name="Reject"
+                        description="#[output application/java --- 'An archived report already exists at ' ++ vars.ctx.archivePath ++ ' and can never be overwritten']" />
+                </on-error-propagate>
+            </error-handler>
+        </try>
+        <ee:transform doc:name="Archive requests">
+            <ee:variables>
+                <ee:set-variable variableName="archiveCalls"><![CDATA[%dw 2.0
+import toBase64 from dw::core::Binaries
+import sha256Hex from dwl::report
+output application/java
+---
+[
+  { method: "POST", path: "/archive", body: { runId: vars.runId, fileType: "SUBMISSION", fileName: vars.ctx.fileName,
+      checksum: vars.ctx.fileChecksum, contentBase64: toBase64(vars.fileBytes) } },
+  { method: "POST", path: "/archive", body: { runId: vars.runId, fileType: "SUMMARY", fileName: vars.ctx.summaryFileName,
+      checksum: sha256Hex(vars.summaryBytes), contentBase64: toBase64(vars.summaryBytes) } }
+]]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <foreach collection="#[vars.archiveCalls]" doc:name="For each file">
+            <set-variable variableName="call" value="#[output application/java --- payload]" doc:name="call archive" />
+            <flow-ref name="sysdb-send" doc:name="POST /archive (DB, insert-only)" />
+        </foreach>
+        <logger level="INFO" category="com.cbit.compliance.prc.audit" doc:name="AUDIT archived"
+            message="#[output application/java --- 'ARCHIVED runId=' ++ vars.runId ++ ' file=' ++ vars.ctx.fileName ++ ' sha256=' ++ vars.ctx.fileChecksum]" />
+    </sub-flow>
+
+    <!-- ======================================================================
+         ANALYSE: hash chain, volume deviation (FR11), advisory AI briefing, audit update
+         ====================================================================== -->
+    <sub-flow name="analyse-report" doc:name="analyse-report">
+        <!-- tamper-evident chain: this report is linked to the previous issued one -->
+        <set-variable variableName="call" value="#[output application/java --- { path: '/chain/head', query: { reportType: vars.ctx.reportType, entityCode: vars.ctx.entityCode } }]" doc:name="call chain head" />
+        <flow-ref name="sysdb-get" doc:name="GET /chain/head" />
+        <ee:transform doc:name="Chain hash">
+            <ee:variables>
+                <ee:set-variable variableName="chain"><![CDATA[%dw 2.0
+import chainHash from dwl::report
+output application/java
+---
+{ prevChainHash: payload.chainHash, chainHash: chainHash(payload.chainHash, vars.ctx.fileChecksum) }]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <!-- trailing average of previous ORIGINAL reports -->
+        <set-variable variableName="call" doc:name="call history"
+            value="#[output application/java --- { path: '/runs', query: { reportType: vars.ctx.reportType, entityCode: vars.ctx.entityCode, status: 'SUCCESS', limit: (p('deviation.window') as Number) * 3 } }]" />
+        <flow-ref name="sysdb-get" doc:name="GET recent runs" />
+        <ee:transform doc:name="Deviation">
+            <ee:variables>
+                <ee:set-variable variableName="deviation"><![CDATA[%dw 2.0
+import deviationPct from dwl::report
+output application/java
+var window  = p('deviation.window') as Number
+var history = ((payload default []) filter (not ($.isRevision default false))) map (($.recordCount default 0) as Number)
+var recent  = if (sizeOf(history) > window) history[0 to window - 1] else history
+var pct     = deviationPct(vars.ctx.recordCount, recent)
+---
+{
+  historySize: sizeOf(recent),
+  average:     if (isEmpty(recent)) null else (sum(recent) / sizeOf(recent)) as String {format: "0.00", locale: "en_US"} as Number,
+  pct:         pct,
+  flagged:     (pct != null) and (sizeOf(recent) >= (p('deviation.minHistory') as Number))
+               and (abs(pct) > (p('deviation.thresholdPercent') as Number))
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <!-- advisory AI briefing: aggregates only, never part of the submission, never blocks the run -->
+        <set-variable variableName="aiSummary" value="#[output application/java --- null]" doc:name="aiSummary = null" />
+        <choice doc:name="AI enabled?">
+            <when expression="#[p('ai.enabled') == 'true']">
+                <try doc:name="Best-effort AI">
+                    <ee:transform doc:name="AI request">
+                        <ee:variables>
+                            <ee:set-variable variableName="aiRequest" resource="dwl/ai-request.dwl" />
+                        </ee:variables>
+                    </ee:transform>
+                    <http:request config-ref="AI_LLM_Config" method="POST" path="${ai.path}"
+                        responseTimeout="${ai.timeoutMs}" doc:name="POST chat completion">
+                        <http:body>#[vars.aiRequest]</http:body>
+                        <http:headers>#[{ 'Authorization': 'Bearer ' ++ p('secure::ai.apiKey'), 'Content-Type': 'application/json' }]</http:headers>
+                    </http:request>
+                    <set-variable variableName="aiSummary" doc:name="aiSummary"
+                        value="#[output application/java --- trim((payload.choices[0].message.content default '') as String)]" />
+                    <error-handler>
+                        <on-error-continue type="ANY" doc:name="Continue without AI">
+                            <logger level="WARN" category="com.cbit.compliance.prc" doc:name="AI unavailable"
+                                message="#[output application/java --- 'AI briefing skipped for ' ++ vars.runId ++ ': ' ++ (error.description default '')]" />
+                        </on-error-continue>
+                    </error-handler>
+                </try>
+            </when>
+        </choice>
+
+        <set-variable variableName="call" doc:name="call patch" value="#[output application/java --- { method: 'PATCH', path: '/runs/' ++ vars.runId, body: {
+            recordCount: vars.ctx.recordCount, totalAmount: vars.ctx.totalAmount, customerCount: vars.ctx.customerCount,
+            completenessOk: true, isNilReport: vars.ctx.isNil,
+            outputFilePath: vars.paths.submission, archiveFilePath: vars.ctx.archivePath,
+            fileChecksum: vars.ctx.fileChecksum, detailChecksum: vars.ctx.detailChecksum,
+            prevChainHash: vars.chain.prevChainHash, chainHash: vars.chain.chainHash,
+            volumeDeviationPct: vars.deviation.pct, aiSummary: vars.aiSummary } }]" />
+        <flow-ref name="sysdb-send" doc:name="PATCH run details" />
+    </sub-flow>
+
+    <!-- ======================================================================
+         DELIVER (FR12, NS 8, NS 14): attachment or secure link, email, alerts
+         ====================================================================== -->
+    <sub-flow name="deliver-report" doc:name="deliver-report">
+        <ee:transform doc:name="Attachment or secure link">
+            <ee:variables>
+                <ee:set-variable variableName="delivery"><![CDATA[%dw 2.0
+import secureToken, nowIst, ts, fmt from dwl::report
+output application/java
+var tooBig = sizeOf(vars.fileBytes) > (p('email.maxAttachmentBytes') as Number)
+var expires = fmt(ts(nowIst()) + ("PT" ++ p('secureLink.validHours') ++ "H") as Period)
+---
+if (not tooBig) { method: "ATTACHMENT", link: null, expiresAt: null }
+else {
+  method: "SECURE_LINK",
+  expiresAt: expires,
+  link: p('secureLink.baseUrl') ++ "/api/downloads/" ++ secureToken(vars.runId, "SUBMISSION", expires, p('secure::secureLink.secret'))
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <ee:transform doc:name="Email request">
+            <ee:variables>
+                <ee:set-variable variableName="emailRequest" resource="dwl/email-request.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <try doc:name="Send email">
+            <set-variable variableName="call" value="#[output application/java --- { path: '/notifications/compliance-report', body: vars.emailRequest }]" doc:name="call email" />
+            <flow-ref name="notify-send" doc:name="POST compliance-report email" />
+            <error-handler>
+                <!-- an undelivered report is an unmet obligation: the run fails, the bookmark stays (NS 14) -->
+                <on-error-propagate type="ANY" doc:name="Delivery failed">
+                    <try doc:name="Record FAILED delivery">
+                        <set-variable variableName="call" value="#[output application/java --- { method: 'PATCH', path: '/runs/' ++ vars.runId, body: { notificationStatus: 'FAILED', deliveryMethod: vars.delivery.method } }]" doc:name="call patch" />
+                        <flow-ref name="sysdb-send" doc:name="PATCH notification FAILED" />
+                        <error-handler><on-error-continue type="ANY" doc:name="Ignore" /></error-handler>
+                    </try>
+                </on-error-propagate>
+            </error-handler>
+        </try>
+        <set-variable variableName="call" value="#[output application/java --- { method: 'PATCH', path: '/runs/' ++ vars.runId, body: { notificationStatus: 'SENT', deliveryMethod: vars.delivery.method } }]" doc:name="call patch" />
+        <flow-ref name="sysdb-send" doc:name="PATCH notification SENT" />
+
+        <choice doc:name="Unusual volume?">
+            <when expression="#[vars.deviation.flagged]">
+                <set-variable variableName="alert" doc:name="alert" value="#[output application/java --- {
+                    severity: 'WARNING', alertType: 'VOLUME_DEVIATION',
+                    title: 'Reported volume differs from the trailing average by ' ++ (vars.deviation.pct as String) ++ '%',
+                    runId: vars.runId, reportType: vars.ctx.reportType, entityCode: vars.ctx.entityCode,
+                    periodStart: vars.ctx.periodStart, periodEnd: vars.ctx.periodEnd,
+                    details: 'Records this period: ' ++ (vars.ctx.recordCount as String) ++ '. Trailing average of the last ' ++ (vars.deviation.historySize as String) ++ ' reports: ' ++ (vars.deviation.average as String) ++ '. Confirm this reflects genuine activity and not an upstream extraction problem.'
+                        ++ (if (isEmpty(vars.aiSummary default '')) '' else ('\n\nAI briefing (advisory): ' ++ vars.aiSummary)) }]" />
+                <flow-ref name="send-alert-safely" doc:name="send-alert-safely" />
+            </when>
+        </choice>
+    </sub-flow>
+</mule>

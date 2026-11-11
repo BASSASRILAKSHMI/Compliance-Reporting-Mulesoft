@@ -21,7 +21,7 @@
             </http:error-response>
         </http:listener>
         <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log request"
-            message="#['sys-db-api ' ++ attributes.method ++ ' ' ++ attributes.requestPath ++ ' correlationId=' ++ correlationId]" />
+            message="#[output application/java --- 'sys-db-api ' ++ attributes.method ++ ' ' ++ attributes.requestPath ++ ' correlationId=' ++ correlationId]" />
         <apikit:router config-ref="sys-compliance-db-api-config" doc:name="APIkit router" />
         <error-handler ref="global-error-handler" />
     </flow>

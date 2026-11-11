@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <munit:config name="prc-compliance-reporting-api-test-suite.xml" />
+
+    <!--
+      All system-API calls are mocked. Files are written for real to the MUnit temp folder.
+      The GET mock answers according to vars.call.path, using test data put in vars.mock*.
+    -->
+    <sub-flow name="test-mock-data">
+        <set-variable variableName="mockControl" value="#[{ reportType: 'STR', entityCode: 'ENT0091', lastReportedUpto: '2026-11-04 21:00:00', lastSequenceNumber: 0 }]" />
+        <set-variable variableName="mockSummary" value="#[{ recordCount: 3, totalAmount: 2378500.00, customerCount: 3, pendingCount: 3,
+            byFlag: [ { flagCode: 'FLG-CROSS-BORDER', count: 1, amount: 1150000.00 }, { flagCode: 'FLG-HIGH-VALUE', count: 1, amount: 248500.00 }, { flagCode: 'FLG-STRUCTURING', count: 1, amount: 980000.00 } ] }]" />
+        <set-variable variableName="mockPage" value="#[{ count: 3, hasMore: false, nextCursor: null, records: [
+            { flagSeq: 1, transactionId: 'TXN-99120455', transactionDatetime: '2026-11-05T14:22:07+05:30', accountNumber: '00214578', customerId: 'CUST-77219', customerName: 'Meena Raghavan', customerType: 'INDIVIDUAL', customerMissing: false, transactionType: 'CARD_PAYMENT', channel: 'ONLINE', currency: 'INR', amount: 248500.00, counterpartyName: 'Global Gadgets Online', counterpartyCountry: 'SG', flagCode: 'FLG-HIGH-VALUE', flagReason: 'Amount above reporting threshold', flaggedAt: '2026-11-05T14:22:09+05:30', reviewedBy: 'RISK_ANALYST_04', reviewStatus: 'CONFIRMED' },
+            { flagSeq: 2, transactionId: 'TXN-99120781', transactionDatetime: '2026-11-05T16:40:55+05:30', accountNumber: '00219004', customerId: 'CUST-81140', customerName: 'Ganesh Iyer', customerType: 'INDIVIDUAL', customerMissing: false, transactionType: 'WIRE_TRANSFER', channel: 'BRANCH', currency: 'INR', amount: 1150000.00, counterpartyName: 'Orient Trading FZE', counterpartyCountry: 'AE', flagCode: 'FLG-CROSS-BORDER', flagReason: 'Cross border transfer to monitored jurisdiction', flaggedAt: '2026-11-05T16:41:02+05:30', reviewedBy: 'RISK_ANALYST_02', reviewStatus: 'CONFIRMED' },
+            { flagSeq: 3, transactionId: 'TXN-99121033', transactionDatetime: '2026-11-05T18:05:12+05:30', accountNumber: '00221876', customerId: 'CUST-66207', customerName: 'Sunrise Exports Pvt Ltd', customerType: 'CORPORATE', customerMissing: false, transactionType: 'CASH_DEPOSIT', channel: 'BRANCH', currency: 'INR', amount: 980000.00, counterpartyName: 'Self', counterpartyCountry: 'IN', flagCode: 'FLG-STRUCTURING', flagReason: 'Multiple deposits below threshold within 24 hours', flaggedAt: '2026-11-05T18:05:20+05:30', reviewedBy: 'RISK_ANALYST_07', reviewStatus: 'CONFIRMED' } ] }]" />
+        <set-variable variableName="ctx" value="#[{ entityCode: 'ENT0091', entityName: 'Bright Financial Services Ltd', reportType: 'STR', currency: 'INR',
+            reportDate: '2026-11-05', periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00',
+            sequenceNumber: 1, isRevision: false, generatedAt: '2026-11-10 21:30:00' }]" />
+        <set-variable variableName="flagMode" value="PENDING" />
+        <set-variable variableName="flagRunId" value="" />
+        <set-variable variableName="outDir" value="output" />
+        <set-variable variableName="runId" value="#['RUN-TEST-' ++ uuid()]" />
+    </sub-flow>
+
+    <!-- one GET mock for every system-API read, keyed on the path being called -->
+    <sub-flow name="test-mock-gets">
+        <munit-tools:mock-when processor="http:request">
+            <munit-tools:with-attributes>
+                <munit-tools:with-attribute attributeName="doc:name" whereValue="GET sys-db" />
+            </munit-tools:with-attributes>
+            <munit-tools:then-return>
+                <munit-tools:payload mediaType="application/java" value="#[
+                    if (vars.call.path == '/flags/summary') vars.mockSummary
+                    else if (vars.call.path == '/flags') vars.mockPage
+                    else if (vars.call.path startsWith '/control/') vars.mockControl
+                    else if (vars.call.path == '/sequences/next') { nextSequence: 1, issuedCount: 0 }
+                    else if (vars.call.path == '/chain/head') { chainHash: 'GENESIS', runId: null }
+                    else if (vars.call.path == '/runs') (vars.mockRuns default [])
+                    else {}]" />
+            </munit-tools:then-return>
+        </munit-tools:mock-when>
+    </sub-flow>
+
+    <!-- ===================== file building ===================== -->
+    <munit:test name="build-report-matches-pdf-layout" description="FR5 - H/D/T layout, totals, checksums for the PDF sample rows">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <flow-ref name="test-mock-gets" />
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-report-file" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.ctx.recordCount]" is="#[MunitTools::equalTo(3)]" />
+            <munit-tools:assert-that expression="#[vars.ctx.customerCount]" is="#[MunitTools::equalTo(3)]" />
+            <munit-tools:assert-that expression="#[vars.ctx.fileName]" is="#[MunitTools::equalTo('ENT0091_STR_20261105_001.csv')]" />
+            <munit-tools:assert-that expression="#[(vars.fileBytes as String {encoding: 'UTF-8'}) startsWith 'H|ENT0091|Bright Financial Services Ltd|STR|2026-11-05|2026-11-10T21:30:00+05:30|001|INR\n']"
+                is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that expression="#[(vars.fileBytes as String {encoding: 'UTF-8'}) contains 'D|2|TXN-99120781|2026-11-05T16:40:55+05:30|00219004|CUST-81140|Ganesh Iyer|INDIVIDUAL|WIRE_TRANSFER|BRANCH|INR|1150000.00|Orient Trading FZE|AE|FLG-CROSS-BORDER|']"
+                is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that expression="#[(vars.fileBytes as String {encoding: 'UTF-8'}) contains ('T|3|2378500.00|3|2026-11-10T21:30:00+05:30|' ++ vars.ctx.detailChecksum)]"
+                is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that expression="#[sizeOf(vars.ctx.fileChecksum)]" is="#[MunitTools::equalTo(64)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="build-report-is-deterministic" description="FR7 - same inputs give a byte-identical file">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <flow-ref name="test-mock-gets" />
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-report-file" />
+            <set-variable variableName="firstChecksum" value="#[vars.ctx.fileChecksum]" />
+            <flow-ref name="test-mock-data" />
+            <flow-ref name="build-report-file" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.ctx.fileChecksum]" is="#[MunitTools::equalTo(vars.firstChecksum)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="nil-report" description="FR10 / NS 1 - zero records gives header + NIL trailer">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <set-variable variableName="mockSummary" value="#[{ recordCount: 0, totalAmount: 0, customerCount: 0, pendingCount: 0, byFlag: [] }]" />
+            <set-variable variableName="mockPage" value="#[{ count: 0, hasMore: false, nextCursor: null, records: [] }]" />
+            <flow-ref name="test-mock-gets" />
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-report-file" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.ctx.isNil]" is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that expression="#[(vars.fileBytes as String {encoding: 'UTF-8'}) endsWith '|NIL_REPORT\n']" is="#[MunitTools::equalTo(true)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="completeness-mismatch-fails" description="FR4 / NS 2 - extracted 3 but aggregate says 4" expectedErrorType="APP:COMPLETENESS_MISMATCH">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <set-variable variableName="mockSummary" value="#[vars.mockSummary - 'recordCount' ++ { recordCount: 4 }]" />
+            <flow-ref name="test-mock-gets" />
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-report-file" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="unrenderable-data-fails" description="NS 10 - a '|' inside a field fails the run" expectedErrorType="APP:INVALID_DATA">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <set-variable variableName="mockPage" value="#[vars.mockPage - 'records' ++ { records: [ vars.mockPage.records[0] - 'customerName' ++ { customerName: 'Ravi | Sons Traders' } ] }]" />
+            <flow-ref name="test-mock-gets" />
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="build-report-file" />
+        </munit:execution>
+    </munit:test>
+
+    <!-- ===================== orchestration ===================== -->
+    <munit:test name="nothing-to-report" description="Bookmark already at the latest cutoff -> NOTHING_TO_REPORT, no run created">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <set-variable variableName="mockControl" value="#[{ lastReportedUpto: '2999-01-01 21:00:00' }]" />
+            <flow-ref name="test-mock-gets" />
+        </munit:behavior>
+        <munit:execution>
+            <set-variable variableName="triggeredBy" value="SCHEDULER" />
+            <set-payload value="#[{ mode: 'NEXT' }]" />
+            <flow-ref name="process-run-request" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[payload[0].outcome]" is="#[MunitTools::equalTo('NOTHING_TO_REPORT')]" />
+            <munit-tools:verify-call processor="http:request" times="0">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="SEND sys-db" />
+                </munit-tools:with-attributes>
+            </munit-tools:verify-call>
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="duplicate-run-rejected" description="NS 5 - second concurrent run is rejected by the lock" expectedErrorType="APP:RUN_IN_PROGRESS">
+        <munit:execution>
+            <set-variable variableName="triggeredBy" value="SCHEDULER" />
+            <flow-ref name="acquire-run-lock" />
+            <flow-ref name="acquire-run-lock" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="revision-of-unreported-date-rejected" description="REVISION only for a date that was already reported" expectedErrorType="APP:CONFLICT">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <flow-ref name="test-mock-gets" />
+        </munit:behavior>
+        <munit:execution>
+            <set-variable variableName="request" value="#[{ mode: 'REVISION', reportDate: '2026-11-08' }]" />
+            <flow-ref name="run-revision" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="issue-report-happy-path" description="Whole pipeline with mocked APIs: archive, email, finalize -> SUCCESS">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <flow-ref name="test-mock-gets" />
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="SEND sys-db" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java"
+                        value="#[if (vars.call.path == '/runs') { runId: vars.runId, startedAt: '2026-11-10 21:30:00', runStatus: 'STARTED' } else { ok: true }]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="POST sys-notification" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[{ status: 'SENT' }]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <set-variable variableName="triggeredBy" value="SCHEDULER" />
+            <set-variable variableName="period" value="#[{ periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00', reportDate: '2026-11-05' }]" />
+            <set-variable variableName="issue" value="#[{ isRevision: false, revisionOfRunId: null, flagMode: 'PENDING', advanceControl: true }]" />
+            <flow-ref name="issue-report" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.outcome.outcome]" is="#[MunitTools::equalTo('SUCCESS')]" />
+            <munit-tools:assert-that expression="#[vars.outcome.deliveryMethod]" is="#[MunitTools::equalTo('ATTACHMENT')]" />
+            <munit-tools:assert-that expression="#[sizeOf(vars.outcome.chainHash)]" is="#[MunitTools::equalTo(64)]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="email-failure-fails-run" description="NS 14 - email not delivered: run FAILED, bookmark untouched, alert attempted"
+        expectedErrorType="HTTP:SERVICE_UNAVAILABLE">
+        <munit:behavior>
+            <flow-ref name="test-mock-data" />
+            <flow-ref name="test-mock-gets" />
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="SEND sys-db" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java"
+                        value="#[if (vars.call.path == '/runs') { runId: vars.runId, startedAt: '2026-11-10 21:30:00', runStatus: 'STARTED' } else { ok: true }]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="POST sys-notification" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:SERVICE_UNAVAILABLE" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <set-variable variableName="triggeredBy" value="SCHEDULER" />
+            <set-variable variableName="period" value="#[{ periodStart: '2026-11-04 21:00:00', periodEnd: '2026-11-05 21:00:00', reportDate: '2026-11-05' }]" />
+            <set-variable variableName="issue" value="#[{ isRevision: false, revisionOfRunId: null, flagMode: 'PENDING', advanceControl: true }]" />
+            <flow-ref name="issue-report" />
+        </munit:execution>
+    </munit:test>
+</mule>

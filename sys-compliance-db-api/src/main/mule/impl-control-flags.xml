@@ -31,7 +31,7 @@ output application/json
     <!-- ===================== /control/{reportType}/{entityCode} ===================== -->
     <sub-flow name="impl-get-control" doc:name="impl-get-control">
         <set-variable variableName="reportKey" doc:name="reportKey"
-            value="#[{ reportType: attributes.uriParams.reportType, entityCode: attributes.uriParams.entityCode }]" />
+            value="#[output application/java --- { reportType: attributes.uriParams.reportType, entityCode: attributes.uriParams.entityCode }]" />
         <db:select config-ref="Compliance_Database_Config" doc:name="Select bookmark">
             <db:sql><![CDATA[
 SELECT report_type,
@@ -49,7 +49,7 @@ AND    entity_code = :entityCode
         <choice doc:name="Found?">
             <when expression="#[isEmpty(payload)]">
                 <raise-error type="APP:NOT_FOUND" doc:name="Not found"
-                    description="#['No control row for ' ++ vars.reportKey.reportType ++ '/' ++ vars.reportKey.entityCode]" />
+                    description="#[output application/java --- 'No control row for ' ++ vars.reportKey.reportType ++ '/' ++ vars.reportKey.entityCode]" />
             </when>
         </choice>
         <ee:transform doc:name="ControlState">
@@ -67,7 +67,7 @@ AND    entity_code = :entityCode
             </ee:variables>
         </ee:transform>
         <logger level="DEBUG" category="com.cbit.compliance.sys.db" doc:name="Log page request"
-            message="#['flag page ' ++ write(vars.pageParams, 'application/json', {indent:false})]" />
+            message="#[output application/java --- 'flag page ' ++ write(vars.pageParams, 'application/json', {indent:false})]" />
         <!-- limit + 1 rows are fetched to know whether another page exists -->
         <db:select config-ref="Compliance_Database_Config" fetchSize="${db.fetchSize}" doc:name="Select flag page">
             <db:sql><![CDATA[

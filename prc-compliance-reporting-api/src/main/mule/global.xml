@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:file="http://www.mulesoft.org/schema/mule/file"
+      xmlns:os="http://www.mulesoft.org/schema/mule/os"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:secure-properties="http://www.mulesoft.org/schema/mule/secure-properties"
+      xmlns:api-gateway="http://www.mulesoft.org/schema/mule/api-gateway"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+        http://www.mulesoft.org/schema/mule/os http://www.mulesoft.org/schema/mule/os/current/mule-os.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd
+        http://www.mulesoft.org/schema/mule/secure-properties http://www.mulesoft.org/schema/mule/secure-properties/current/mule-secure-properties.xsd
+        http://www.mulesoft.org/schema/mule/api-gateway http://www.mulesoft.org/schema/mule/api-gateway/current/mule-api-gateway.xsd">
+
+    <global-property doc:name="Default environment" name="env" value="local" />
+    <configuration-properties doc:name="App properties" file="config/config-${env}.yaml" />
+    <secure-properties:config name="Secure_Properties_Config" doc:name="Secure properties"
+        file="config/config-secure-${env}.yaml" key="${mule.key}">
+        <secure-properties:encrypt algorithm="AES" mode="CBC" />
+    </secure-properties:config>
+
+    <!-- ================= inbound ================= -->
+    <http:listener-config name="prc_http_listener_config" doc:name="HTTP listener">
+        <http:listener-connection host="0.0.0.0" port="${http.port}" />
+    </http:listener-config>
+
+    <apikit:config name="prc-compliance-reporting-api-config" doc:name="APIkit config"
+        api="prc-compliance-reporting-api.raml"
+        outboundHeadersMapName="outboundHeaders" httpStatusVarName="httpStatus" />
+
+    <!-- ================= outbound: system APIs ================= -->
+    <http:request-config name="Sys_DB_API_Config" doc:name="sys-compliance-db-api" basePath="${sysDb.basePath}">
+        <http:request-connection host="${sysDb.host}" port="${sysDb.port}" protocol="${sysDb.protocol}">
+            <reconnection>
+                <reconnect frequency="2000" count="3" />
+            </reconnection>
+        </http:request-connection>
+    </http:request-config>
+
+    <http:request-config name="Sys_Notification_API_Config" doc:name="sys-notification-api" basePath="${sysNotification.basePath}">
+        <http:request-connection host="${sysNotification.host}" port="${sysNotification.port}" protocol="${sysNotification.protocol}">
+            <reconnection>
+                <reconnect frequency="2000" count="3" />
+            </reconnection>
+        </http:request-connection>
+    </http:request-config>
+
+    <!-- ================= outbound: LLM (advisory briefing only) ================= -->
+    <http:request-config name="AI_LLM_Config" doc:name="Groq (OpenAI-compatible)">
+        <http:request-connection host="${ai.host}" port="443" protocol="HTTPS" />
+    </http:request-config>
+
+    <!-- ================= files ================= -->
+    <!-- working directory: local disk in Studio, /tmp on CloudHub (ephemeral - the DB archive is the durable copy) -->
+    <file:config name="Report_File_Config" doc:name="Report files">
+        <file:connection workingDir="${file.workingDir}" />
+    </file:config>
+
+    <!-- ================= object store: run lock ================= -->
+    <!-- one report run at a time (scheduler and manual triggers share it); TTL frees a lock left by a crash -->
+    <os:object-store name="Run_Lock_Store" doc:name="Run lock store" persistent="true"
+        entryTtl="${runLock.ttlMinutes}" entryTtlUnit="MINUTES" />
+    <os:object-store name="Sentinel_State_Store" doc:name="Sentinel state" persistent="true" />
+
+    <api-gateway:autodiscovery apiId="${api.id}" ignoreBasePath="true"
+        doc:name="API Autodiscovery" flowRef="prc-compliance-reporting-api-main" />
+
+    <configuration doc:name="Configuration" defaultErrorHandler-ref="global-error-handler" />
+</mule>

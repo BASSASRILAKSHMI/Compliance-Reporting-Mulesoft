@@ -21,7 +21,11 @@
             <set-variable variableName="errorCode" value="BAD_REQUEST" doc:name="Code" />
             <flow-ref name="build-error-response" doc:name="Build error" />
         </on-error-propagate>
-        
+        <on-error-propagate type="APIKIT:NOT_FOUND" doc:name="404 resource">
+            <set-variable variableName="httpStatus" value="404" doc:name="Status 404" />
+            <set-variable variableName="errorCode" value="RESOURCE_NOT_FOUND" doc:name="Code" />
+            <flow-ref name="build-error-response" doc:name="Build error" />
+        </on-error-propagate>
         <on-error-propagate type="APIKIT:METHOD_NOT_ALLOWED" doc:name="405">
             <set-variable variableName="httpStatus" value="405" doc:name="Status 405" />
             <set-variable variableName="errorCode" value="METHOD_NOT_ALLOWED" doc:name="Code" />
@@ -44,13 +48,11 @@
         </on-error-propagate>
 
         <!-- ===== Business errors raised by the implementation ===== -->
-         
         <on-error-propagate type="APP:BAD_REQUEST" doc:name="400 business">
             <set-variable variableName="httpStatus" value="400" doc:name="Status 400" />
             <set-variable variableName="errorCode" value="#[vars.appErrorCode default 'BAD_REQUEST']" doc:name="Code" />
             <flow-ref name="build-error-response" doc:name="Build error" />
         </on-error-propagate>
-        
 
         <!-- ===== SMTP (after retries) ===== -->
         <on-error-propagate type="EMAIL:CONNECTIVITY, EMAIL:SEND, MULE:RETRY_EXHAUSTED" doc:name="502 email failed">

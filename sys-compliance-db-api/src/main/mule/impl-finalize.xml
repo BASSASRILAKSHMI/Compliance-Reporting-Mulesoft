@@ -19,8 +19,8 @@
       and the period stays unreported -> it is retried, never skipped (FR15, NS 3-5).
     -->
     <sub-flow name="impl-finalize-report" doc:name="impl-finalize-report">
-        <set-variable variableName="fin" value="#[payload]" doc:name="request" />
-        <set-variable variableName="flagsUpdated" value="#[0]" doc:name="flagsUpdated = 0" />
+        <set-variable variableName="fin" value="#[output application/java --- payload]" doc:name="request" />
+        <set-variable variableName="flagsUpdated" value="#[output application/java --- 0]" doc:name="flagsUpdated = 0" />
 
         <try doc:name="DB transaction" transactionalAction="ALWAYS_BEGIN" transactionType="LOCAL">
 
@@ -42,14 +42,14 @@ AND    report_status = 'PENDING_REPORT'
     periodEnd:   vars.fin.periodEnd
 }]]]></db:input-parameters>
                     </db:update>
-                    <set-variable variableName="flagsUpdated" value="#[payload.affectedRows]" doc:name="flagsUpdated" />
+                    <set-variable variableName="flagsUpdated" value="#[output application/java --- payload.affectedRows]" doc:name="flagsUpdated" />
                 </when>
             </choice>
             <choice doc:name="Flag count as expected?">
                 <when expression="#[vars.flagsUpdated != vars.fin.expectedFlagUpdates]">
                     <set-variable variableName="appErrorCode" value="FLAG_COUNT_CHANGED" doc:name="code" />
                     <raise-error type="APP:CONFLICT" doc:name="Rollback"
-                        description="#['Expected ' ++ (vars.fin.expectedFlagUpdates as String) ++ ' flags to be marked REPORTED but ' ++ (vars.flagsUpdated as String) ++ ' matched. Flags changed after extraction - run must be repeated.']" />
+                        description="#[output application/java --- 'Expected ' ++ (vars.fin.expectedFlagUpdates as String) ++ ' flags to be marked REPORTED but ' ++ (vars.flagsUpdated as String) ++ ' matched. Flags changed after extraction - run must be repeated.']" />
                 </when>
             </choice>
 
@@ -69,7 +69,7 @@ AND    run_status = 'STARTED'
                 <when expression="#[payload.affectedRows != 1]">
                     <set-variable variableName="appErrorCode" value="RUN_NOT_STARTED" doc:name="code" />
                     <raise-error type="APP:CONFLICT" doc:name="Rollback"
-                        description="#['Run ' ++ vars.fin.runId ++ ' is not in STARTED state']" />
+                        description="#[output application/java --- 'Run ' ++ vars.fin.runId ++ ' is not in STARTED state']" />
                 </when>
             </choice>
 
@@ -100,7 +100,7 @@ AND    last_reported_upto = :periodStart
                         <when expression="#[payload.affectedRows != 1]">
                             <set-variable variableName="appErrorCode" value="CONTROL_CONFLICT" doc:name="code" />
                             <raise-error type="APP:CONFLICT" doc:name="Rollback"
-                                description="#['Bookmark is no longer at ' ++ vars.fin.periodStart ++ ' - another run already reported this period']" />
+                                description="#[output application/java --- 'Bookmark is no longer at ' ++ vars.fin.periodStart ++ ' - another run already reported this period']" />
                         </when>
                     </choice>
                 </when>
@@ -108,7 +108,7 @@ AND    last_reported_upto = :periodStart
         </try>
 
         <logger level="INFO" category="com.cbit.compliance.sys.db" doc:name="Log finalized"
-            message="#['finalized runId=' ++ vars.fin.runId ++ ' seq=' ++ (vars.fin.sequenceNumber as String) ++ ' flags=' ++ (vars.flagsUpdated as String) ++ ' controlAdvanced=' ++ (vars.fin.advanceControl as String)]" />
+            message="#[output application/java --- 'finalized runId=' ++ vars.fin.runId ++ ' seq=' ++ (vars.fin.sequenceNumber as String) ++ ' flags=' ++ (vars.flagsUpdated as String) ++ ' controlAdvanced=' ++ (vars.fin.advanceControl as String)]" />
 
         <db:select config-ref="Compliance_Database_Config" doc:name="Read bookmark">
             <db:sql><![CDATA[

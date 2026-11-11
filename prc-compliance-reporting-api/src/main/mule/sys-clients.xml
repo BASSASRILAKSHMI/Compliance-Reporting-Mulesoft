@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd">
+
+    <!--
+      Reusable clients for the system APIs. Callers set vars.call before flow-ref:
+        { path: "/flags", query: {...} }                    (GET)
+        { method: "POST", path: "/runs", body: {...} }      (send)
+      The correlation id is propagated automatically (X-Correlation-ID).
+    -->
+
+    <!-- GET with retry: reads are idempotent, so transient failures are retried -->
+    <sub-flow name="sysdb-get" doc:name="sysdb-get">
+        <until-successful maxRetries="${sysDb.retries}" millisBetweenRetries="${sysDb.retryDelayMs}" doc:name="Retry GET">
+            <http:request config-ref="Sys_DB_API_Config" method="GET" path="#[vars.call.path]"
+                responseTimeout="${sysDb.timeoutMs}" doc:name="GET sys-db">
+                <http:query-params>#[vars.call.query default {}]</http:query-params>
+            </http:request>
+        </until-successful>
+        <set-payload value="#[output application/java --- payload]" doc:name="Response as Java" />
+    </sub-flow>
+
+    <!-- writes are NOT retried here: a finalize or archive insert must never be applied twice -->
+    <sub-flow name="sysdb-send" doc:name="sysdb-send">
+        <http:request config-ref="Sys_DB_API_Config" method="#[vars.call.method]" path="#[vars.call.path]"
+            responseTimeout="${sysDb.timeoutMs}" doc:name="SEND sys-db">
+            <http:body>#[output application/json skipNullOn="everywhere" --- vars.call.body]</http:body>
+        </http:request>
+        <set-payload value="#[output application/java --- payload]" doc:name="Response as Java" />
+    </sub-flow>
+
+    <!-- email; sys-notification-api already retries SMTP itself -->
+    <sub-flow name="notify-send" doc:name="notify-send">
+        <http:request config-ref="Sys_Notification_API_Config" method="POST" path="#[vars.call.path]"
+            responseTimeout="${sysNotification.timeoutMs}" doc:name="POST sys-notification">
+            <http:body>#[output application/json skipNullOn="everywhere" --- vars.call.body]</http:body>
+        </http:request>
+        <set-payload value="#[output application/java --- payload]" doc:name="Response as Java" />
+    </sub-flow>
+
+    <!-- alerts must never break the flow that raises them -->
+    <sub-flow name="send-alert-safely" doc:name="send-alert-safely">
+        <try doc:name="Best effort">
+            <set-variable variableName="call" doc:name="call"
+                value="#[output application/java --- { path: '/notifications/alert', body: vars.alert ++ { correlationId: correlationId } }]" />
+            <flow-ref name="notify-send" doc:name="notify-send" />
+            <logger level="WARN" category="com.cbit.compliance.prc.alert" doc:name="Alert sent"
+                message="#[output application/java --- 'ALERT_SENT ' ++ vars.alert.severity ++ ' ' ++ vars.alert.alertType ++ ' runId=' ++ (vars.alert.runId default '-')]" />
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="Log only">
+                    <logger level="ERROR" category="com.cbit.compliance.prc.alert" doc:name="Alert failed"
+                        message="#[output application/java --- 'ALERT_NOT_DELIVERED ' ++ vars.alert.alertType ++ ' : ' ++ (error.description default '')]" />
+                </on-error-continue>
+            </error-handler>
+        </try>
+    </sub-flow>
+</mule>

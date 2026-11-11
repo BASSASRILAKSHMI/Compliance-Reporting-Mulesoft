@@ -1,0 +1,253 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:file="http://www.mulesoft.org/schema/mule/file"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/file http://www.mulesoft.org/schema/mule/file/current/mule-file.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!--
+      build-report-file
+      in : vars.ctx (entity, reportType, currency, reportDate, periodStart, periodEnd, sequenceNumber,
+                     isRevision, generatedAt), vars.flagMode, vars.flagRunId, vars.outDir, vars.runId
+      out: vars.ctx enriched (counts, checksums, file names, byFlag, warnings, preview),
+           vars.fileBytes, vars.summaryBytes, vars.paths, vars.expected
+      Never holds the full result set: D lines are appended to a work file page by page (FR3).
+    -->
+    <sub-flow name="build-report-file" doc:name="build-report-file">
+        <ee:transform doc:name="File names and paths">
+            <ee:variables>
+                <ee:set-variable variableName="ctx"><![CDATA[%dw 2.0
+import fileName from dwl::report
+output application/java
+---
+vars.ctx ++ {
+  fileName:        fileName(vars.ctx.entityCode, vars.ctx.reportType, vars.ctx.reportDate, vars.ctx.sequenceNumber, ".csv"),
+  summaryFileName: fileName(vars.ctx.entityCode, vars.ctx.reportType, vars.ctx.reportDate, vars.ctx.sequenceNumber, "_summary.html")
+}]]></ee:set-variable>
+                <ee:set-variable variableName="paths"><![CDATA[%dw 2.0
+import fileName from dwl::report
+output application/java
+var day = vars.ctx.reportDate
+var name = fileName(vars.ctx.entityCode, vars.ctx.reportType, vars.ctx.reportDate, vars.ctx.sequenceNumber, ".csv")
+var summary = fileName(vars.ctx.entityCode, vars.ctx.reportType, vars.ctx.reportDate, vars.ctx.sequenceNumber, "_summary.html")
+---
+{
+  details:    vars.outDir ++ "/work/" ++ vars.runId ++ ".details.part",
+  submission: vars.outDir ++ "/" ++ day ++ "/" ++ name,
+  summary:    vars.outDir ++ "/" ++ day ++ "/" ++ summary,
+  archiveDir: p('file.archiveDir') ++ "/" ++ day ++ "/" ++ vars.runId
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+
+        <!-- 1. independent aggregate = the expected result (FR4) -->
+        <set-variable variableName="call" doc:name="call summary"
+            value="#[output application/java --- { path: '/flags/summary', query: { periodStart: vars.ctx.periodStart, periodEnd: vars.ctx.periodEnd, mode: vars.flagMode, runId: vars.flagRunId default '' } }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /flags/summary" />
+        <set-variable variableName="expected" value="#[output application/java --- payload]" doc:name="expected" />
+        <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log expected"
+            message="#[output application/java --- 'runId=' ++ vars.runId ++ ' period=' ++ vars.ctx.periodStart ++ '..' ++ vars.ctx.periodEnd ++ ' expected records=' ++ (vars.expected.recordCount as String) ++ ' total=' ++ (vars.expected.totalAmount as String)]" />
+
+        <!-- 2. paged extraction -->
+        <ee:transform doc:name="Init extraction state">
+            <ee:variables>
+                <ee:set-variable variableName="ext"><![CDATA[%dw 2.0
+output application/java
+---
+{
+  more: true, serial: 0, total: 0, customers: {}, warnings: [], preview: [],
+  cursor: { afterFlaggedAt: "1970-01-02 00:00:00", afterTransactionId: "", afterFlagCode: "" }
+}]]></ee:set-variable>
+                <ee:set-variable variableName="pageCount"><![CDATA[%dw 2.0
+output application/java
+---
+ceil((vars.expected.recordCount default 0) / (p('flags.pageSize') as Number)) + 1]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <try doc:name="Remove stale work file">
+            <file:delete config-ref="Report_File_Config" path="#[vars.paths.details]" doc:name="Delete details work file" />
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="None to delete" />
+            </error-handler>
+        </try>
+
+        <foreach collection="#[1 to vars.pageCount]" doc:name="For each page">
+            <choice doc:name="More pages?">
+                <when expression="#[vars.ext.more]">
+                    <set-variable variableName="call" doc:name="call page" value="#[output application/java --- {
+                        path: '/flags',
+                        query: {
+                          periodStart: vars.ctx.periodStart, periodEnd: vars.ctx.periodEnd,
+                          mode: vars.flagMode, runId: vars.flagRunId default '',
+                          afterFlaggedAt: vars.ext.cursor.afterFlaggedAt,
+                          afterTransactionId: vars.ext.cursor.afterTransactionId,
+                          afterFlagCode: vars.ext.cursor.afterFlagCode,
+                          limit: p('flags.pageSize')
+                        } }]" />
+                    <flow-ref name="sysdb-get" doc:name="GET /flags page" />
+                    <ee:transform doc:name="Validate + render page">
+                        <ee:variables>
+                            <ee:set-variable variableName="pageOut"><![CDATA[%dw 2.0
+import recordIssues, detailLine from dwl::report
+output application/java
+var page = payload
+var issues = (page.records default []) map recordIssues($, vars.ctx.currency, p('report.maxAmount') as Number, p('report.missingCustomerPolicy'))
+var lines = (page.records default []) map ((r, i) -> detailLine(r, vars.ext.serial + i + 1))
+---
+// map/flatMap always return a list (selectors on an empty list return null)
+{
+  errors:   issues flatMap ($.errors default []),
+  warnings: issues flatMap ($.warnings default []),
+  count:    page.count default 0,
+  amount:   sum((page.records default []) map ($.amount default 0)) default 0,
+  customers: ((page.records default []) reduce ((r, acc = {}) -> acc ++ { (r.customerId): true })) default {},
+  text:     if (isEmpty(lines)) "" else (lines joinBy "\n") ++ "\n",
+  lines:    lines,
+  hasMore:  page.hasMore,
+  next:     page.nextCursor
+}]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                    <choice doc:name="Invalid data?">
+                        <when expression="#[not isEmpty(vars.pageOut.errors)]">
+                            <raise-error type="APP:INVALID_DATA" doc:name="Fail run (NS 10)"
+                                description="#[output application/java --- sizeOf(vars.pageOut.errors) as String ++ ' record(s) cannot be rendered safely: ' ++ ((vars.pageOut.errors[0 to (min([sizeOf(vars.pageOut.errors), 5]) - 1)]) joinBy '; ')]" />
+                        </when>
+                    </choice>
+                    <choice doc:name="Records on page?">
+                        <when expression="#[vars.pageOut.count &gt; 0]">
+                            <file:write config-ref="Report_File_Config" path="#[vars.paths.details]" mode="APPEND"
+                                createParentDirectories="true" doc:name="Append D lines">
+                                <file:content>#[vars.pageOut.text]</file:content>
+                            </file:write>
+                        </when>
+                    </choice>
+                    <ee:transform doc:name="Advance cursor">
+                        <ee:variables>
+                            <ee:set-variable variableName="ext"><![CDATA[%dw 2.0
+output application/java
+var o = vars.pageOut
+var room = 200 - sizeOf(vars.ext.preview)
+---
+{
+  more:      o.hasMore,
+  serial:    vars.ext.serial + o.count,
+  total:     vars.ext.total + o.amount,
+  customers: vars.ext.customers ++ o.customers,
+  warnings:  vars.ext.warnings ++ o.warnings,
+  preview:   vars.ext.preview ++ (if (room > 0 and not isEmpty(o.lines)) o.lines[0 to (min([room, sizeOf(o.lines)]) - 1)] else []),
+  cursor:    o.next default vars.ext.cursor
+}]]></ee:set-variable>
+                        </ee:variables>
+                    </ee:transform>
+                    <logger level="DEBUG" category="com.cbit.compliance.prc" doc:name="Log page"
+                        message="#[output application/java --- 'runId=' ++ vars.runId ++ ' page records=' ++ (vars.pageOut.count as String) ++ ' extracted so far=' ++ (vars.ext.serial as String)]" />
+                </when>
+            </choice>
+        </foreach>
+
+        <!-- 3. completeness check: extracted vs independent aggregate (FR4, NS 2) -->
+        <ee:transform doc:name="Completeness">
+            <ee:variables>
+                <ee:set-variable variableName="completeness"><![CDATA[%dw 2.0
+output application/java
+var e = vars.expected
+var x = { recordCount: vars.ext.serial, totalAmount: vars.ext.total, customerCount: sizeOf(keysOf(vars.ext.customers)) }
+---
+{
+  ok: (x.recordCount == e.recordCount) and (x.totalAmount == e.totalAmount)
+      and (x.customerCount == e.customerCount) and (not vars.ext.more),
+  extracted: x,
+  expected: { recordCount: e.recordCount, totalAmount: e.totalAmount, customerCount: e.customerCount }
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <choice doc:name="Complete?">
+            <when expression="#[not vars.completeness.ok]">
+                <raise-error type="APP:COMPLETENESS_MISMATCH" doc:name="Fail before any report is issued"
+                    description="#[output application/java --- 'Extracted ' ++ write(vars.completeness.extracted, 'application/json', {indent:false}) ++ ' but the independent aggregate is ' ++ write(vars.completeness.expected, 'application/json', {indent:false})]" />
+            </when>
+        </choice>
+
+        <!-- 4. read back the detail section (empty for a NIL report) -->
+        <choice doc:name="Any detail lines?">
+            <when expression="#[vars.ext.serial &gt; 0]">
+                <file:read config-ref="Report_File_Config" path="#[vars.paths.details]"
+                    outputMimeType="text/plain; charset=UTF-8" doc:name="Read D lines" />
+                <set-variable variableName="detailText" value="#[output application/java --- payload as String]" doc:name="detailText" />
+            </when>
+            <otherwise>
+                <set-variable variableName="detailText" value="#[output application/java --- '']" doc:name="no detail lines" />
+            </otherwise>
+        </choice>
+
+        <!-- 5. H + D + T, checksums (FR5, FR9) -->
+        <ee:transform doc:name="Assemble submission file">
+            <ee:variables>
+                <ee:set-variable variableName="ctx"><![CDATA[%dw 2.0
+import headerLine, trailerLine, sha256Text from dwl::report
+output application/java
+var detailChecksum = sha256Text(vars.detailText)
+var count = vars.ext.serial
+var header  = headerLine(vars.ctx)
+var trailer = trailerLine({ recordCount: count, totalAmount: vars.ext.total, customerCount: sizeOf(keysOf(vars.ext.customers)),
+                            generatedAt: vars.ctx.generatedAt, detailChecksum: detailChecksum })
+---
+vars.ctx ++ {
+  recordCount:    count,
+  totalAmount:    vars.ext.total,
+  customerCount:  sizeOf(keysOf(vars.ext.customers)),
+  isNil:          count == 0,
+  byFlag:         vars.expected.byFlag default [],
+  warnings:       vars.ext.warnings,
+  previewLines:   vars.ext.preview,
+  detailChecksum: if (count == 0) "NIL_REPORT" else detailChecksum,
+  fileText:       header ++ "\n" ++ vars.detailText ++ trailer ++ "\n"
+}]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <ee:transform doc:name="Bytes + whole-file checksum">
+            <ee:variables>
+                <ee:set-variable variableName="fileBytes"><![CDATA[%dw 2.0
+output application/java
+---
+vars.ctx.fileText as Binary {encoding: "UTF-8"}]]></ee:set-variable>
+                <ee:set-variable variableName="ctx"><![CDATA[%dw 2.0
+import sha256Text from dwl::report
+output application/java
+---
+(vars.ctx - "fileText") ++ { fileChecksum: sha256Text(vars.ctx.fileText) }]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <file:write config-ref="Report_File_Config" path="#[vars.paths.submission]" mode="OVERWRITE"
+            createParentDirectories="true" doc:name="Write submission file">
+            <file:content>#[vars.fileBytes]</file:content>
+        </file:write>
+
+        <!-- 6. human-readable summary (FR6) -->
+        <ee:transform doc:name="Render summary">
+            <ee:variables>
+                <ee:set-variable variableName="summaryText" resource="dwl/summary-html.dwl" />
+            </ee:variables>
+        </ee:transform>
+        <set-variable variableName="summaryBytes" doc:name="summaryBytes"
+            value="#[output application/java --- (vars.summaryText as String) as Binary {encoding: 'UTF-8'}]" />
+        <file:write config-ref="Report_File_Config" path="#[vars.paths.summary]" mode="OVERWRITE"
+            createParentDirectories="true" doc:name="Write summary">
+            <file:content>#[vars.summaryBytes]</file:content>
+        </file:write>
+
+        <try doc:name="Remove work file">
+            <file:delete config-ref="Report_File_Config" path="#[vars.paths.details]" doc:name="Delete details work file" />
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="Ignore" />
+            </error-handler>
+        </try>
+        <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log built"
+            message="#[output application/java --- 'runId=' ++ vars.runId ++ ' built ' ++ vars.ctx.fileName ++ ' records=' ++ (vars.ctx.recordCount as String) ++ ' sha256=' ++ vars.ctx.fileChecksum]" />
+    </sub-flow>
+</mule>

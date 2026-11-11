@@ -22,7 +22,7 @@
             <when expression="#[vars.arc.actualChecksum != vars.arc.expectedChecksum]">
                 <set-variable variableName="appErrorCode" value="CHECKSUM_MISMATCH" doc:name="code" />
                 <raise-error type="APP:BAD_REQUEST" doc:name="Reject"
-                    description="#['Checksum mismatch for ' ++ vars.arc.fileName ++ ': expected ' ++ vars.arc.expectedChecksum ++ ' got ' ++ vars.arc.actualChecksum]" />
+                    description="#[output application/java --- 'Checksum mismatch for ' ++ vars.arc.fileName ++ ': expected ' ++ vars.arc.expectedChecksum ++ ' got ' ++ vars.arc.actualChecksum]" />
             </when>
         </choice>
 
@@ -38,10 +38,10 @@ WHERE  run_id = :runId AND file_type = :fileType
         <choice doc:name="Exists?">
             <when expression="#[(payload[0].cnt as Number) &gt; 0]">
                 <logger level="WARN" category="com.cbit.compliance.sys.db.audit" doc:name="AUDIT overwrite attempt"
-                    message="#['ARCHIVE_OVERWRITE_REJECTED runId=' ++ vars.arc.runId ++ ' fileType=' ++ vars.arc.fileType ++ ' fileName=' ++ vars.arc.fileName ++ ' correlationId=' ++ correlationId]" />
+                    message="#[output application/java --- 'ARCHIVE_OVERWRITE_REJECTED runId=' ++ vars.arc.runId ++ ' fileType=' ++ vars.arc.fileType ++ ' fileName=' ++ vars.arc.fileName ++ ' correlationId=' ++ correlationId]" />
                 <set-variable variableName="appErrorCode" value="ARCHIVE_EXISTS" doc:name="code" />
                 <raise-error type="APP:CONFLICT" doc:name="Reject"
-                    description="#['Archived file already exists and can never be overwritten: ' ++ vars.arc.fileName]" />
+                    description="#[output application/java --- 'Archived file already exists and can never be overwritten: ' ++ vars.arc.fileName]" />
             </when>
         </choice>
 
@@ -69,7 +69,7 @@ VALUES
         </try>
 
         <logger level="INFO" category="com.cbit.compliance.sys.db.audit" doc:name="AUDIT archived"
-            message="#['ARCHIVED runId=' ++ vars.arc.runId ++ ' file=' ++ vars.arc.fileName ++ ' bytes=' ++ (vars.arc.fileSize as String) ++ ' chunks=' ++ (sizeOf(vars.arc.chunks) as String) ++ ' sha256=' ++ vars.arc.actualChecksum]" />
+            message="#[output application/java --- 'ARCHIVED runId=' ++ vars.arc.runId ++ ' file=' ++ vars.arc.fileName ++ ' bytes=' ++ (vars.arc.fileSize as String) ++ ' chunks=' ++ (sizeOf(vars.arc.chunks) as String) ++ ' sha256=' ++ vars.arc.actualChecksum]" />
         <set-variable variableName="httpStatus" value="201" doc:name="201 Created" />
         <ee:transform doc:name="ArchiveEntry">
             <ee:message>
@@ -130,7 +130,7 @@ payload map {
     <!-- ===================== GET /archive/{runId}/{fileType} (exact bytes) ===================== -->
     <sub-flow name="impl-get-archive-content" doc:name="impl-get-archive-content">
         <set-variable variableName="arcKey" doc:name="key"
-            value="#[{ runId: attributes.uriParams.runId, fileType: attributes.uriParams.fileType }]" />
+            value="#[output application/java --- { runId: attributes.uriParams.runId, fileType: attributes.uriParams.fileType }]" />
         <db:select config-ref="Compliance_Database_Config" doc:name="Select chunks">
             <db:sql><![CDATA[
 SELECT chunk_no, content, file_name, file_size, checksum,
@@ -144,7 +144,7 @@ ORDER BY chunk_no
         <choice doc:name="Found?">
             <when expression="#[isEmpty(payload)]">
                 <raise-error type="APP:NOT_FOUND" doc:name="Not found"
-                    description="#['No archived ' ++ vars.arcKey.fileType ++ ' for run ' ++ vars.arcKey.runId]" />
+                    description="#[output application/java --- 'No archived ' ++ vars.arcKey.fileType ++ ' for run ' ++ vars.arcKey.runId]" />
             </when>
         </choice>
         <ee:transform doc:name="ArchiveContent">

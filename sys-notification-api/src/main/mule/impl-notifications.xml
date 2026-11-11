@@ -50,9 +50,7 @@ output application/java
         </ee:transform>
         <!-- transient SMTP failures are retried; a permanent failure surfaces as 502 -->
         <until-successful maxRetries="${smtp.retry.max}" millisBetweenRetries="${smtp.retry.delayMs}" doc:name="Retry SMTP">
-                        <!-- list and map parameters taken from expressions must be attributes -->
-                        <!-- recipient list from an expression = attribute; attachments map = child element -->
-                        <!-- recipient list from an expression = attribute; attachments map = child element -->
+            <!-- recipient list from an expression = attribute; attachments map = child element -->
             <email:send config-ref="Compliance_SMTP_Config" doc:name="Send email"
                 subject="#[vars.mail.subject]"
                 toAddresses="#[vars.mail.to]">

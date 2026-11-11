@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <flow name="prc-compliance-reporting-api-main" doc:name="prc-compliance-reporting-api-main">
+        <http:listener config-ref="prc_http_listener_config" path="/api/*" doc:name="Listener /api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <logger level="INFO" category="com.cbit.compliance.prc" doc:name="Log request"
+            message="#[output application/java --- 'prc-api ' ++ attributes.method ++ ' ' ++ attributes.requestPath ++ ' correlationId=' ++ correlationId]" />
+        <apikit:router config-ref="prc-compliance-reporting-api-config" doc:name="APIkit router" />
+        <error-handler ref="global-error-handler" />
+    </flow>
+
+    <flow name="get:\health:prc-compliance-reporting-api-config">
+        <flow-ref name="ops-health" doc:name="ops-health" />
+    </flow>
+
+    <flow name="post:\runs:application\json:prc-compliance-reporting-api-config">
+        <set-variable variableName="triggeredBy" value="#[output application/java --- 'user:' ++ (payload.triggeredBy default 'api')]" doc:name="triggeredBy" />
+        <flow-ref name="process-run-request" doc:name="process-run-request" />
+    </flow>
+
+    <flow name="get:\runs:prc-compliance-reporting-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/runs', query: attributes.queryParams }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /runs" />
+    </flow>
+
+    <flow name="get:\runs\(runId):prc-compliance-reporting-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/runs/' ++ attributes.uriParams.runId }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /runs/{runId}" />
+    </flow>
+
+    <flow name="get:\late-flags:prc-compliance-reporting-api-config">
+        <flow-ref name="ops-late-flags" doc:name="ops-late-flags" />
+    </flow>
+
+    <flow name="get:\archive:prc-compliance-reporting-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/archive', query: attributes.queryParams }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /archive" />
+    </flow>
+
+    <flow name="get:\archive\(runId)\(fileType):prc-compliance-reporting-api-config">
+        <set-variable variableName="call" doc:name="call"
+            value="#[output application/java --- { path: '/archive/' ++ attributes.uriParams.runId ++ '/' ++ attributes.uriParams.fileType }]" />
+        <flow-ref name="sysdb-get" doc:name="GET /archive/{runId}/{fileType}" />
+    </flow>
+
+    <flow name="post:\verify:application\json:prc-compliance-reporting-api-config">
+        <flow-ref name="ops-verify-file" doc:name="ops-verify-file" />
+    </flow>
+
+    <flow name="get:\chain\verify:prc-compliance-reporting-api-config">
+        <flow-ref name="ops-verify-chain" doc:name="ops-verify-chain" />
+    </flow>
+</mule>
