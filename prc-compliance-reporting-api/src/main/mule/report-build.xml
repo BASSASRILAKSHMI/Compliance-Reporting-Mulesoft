@@ -71,7 +71,7 @@ ceil((vars.expected.recordCount default 0) / (p('flags.pageSize') as Number)) + 
         <try doc:name="Remove stale work file">
             <file:delete config-ref="Report_File_Config" path="#[vars.paths.details]" doc:name="Delete details work file" />
             <error-handler>
-                <on-error-continue type="ANY" doc:name="None to delete" />
+                <on-error-continue type="ANY" logException="false" doc:name="None to delete" />
             </error-handler>
         </try>
 

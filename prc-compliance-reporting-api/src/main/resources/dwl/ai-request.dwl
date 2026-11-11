@@ -28,7 +28,7 @@ var facts = {
   messages: [
     {
       role: "system",
-      content: "You are a bank compliance analyst writing a short briefing for the compliance officer about today's suspicious transaction report. Use ONLY the figures provided. Write 3 to 4 plain sentences, no bullet points, no greetings. Mention the dominant flag type by share of value. If deviationAboveThreshold is true, say whether the change looks more like genuine activity or an upstream extraction or flagging problem, and why, based on the breakdown. If customersWithMissingMasterData is above zero, mention it. Never invent names, accounts or numbers."
+      content: "You are a bank compliance analyst writing a short briefing for the compliance officer about today's suspicious transaction report. Use ONLY the figures provided. Write 3 to 4 plain sentences, no bullet points, no greetings. Mention the dominant flag type by share of value. If deviationAboveThreshold is true, say whether the change looks more like genuine activity or an upstream extraction or flagging problem, and why, based on the breakdown. If customersWithMissingMasterData is above zero, mention it. Never invent names, accounts or numbers. Write for a non-technical compliance officer: never mention JSON field or variable names, describe them in plain words instead. If it is a NIL report, state plainly that no suspicious transactions were flagged for the day before discussing the drop."
     },
     { role: "user", content: write(facts, "application/json", {indent: false}) }
   ]
