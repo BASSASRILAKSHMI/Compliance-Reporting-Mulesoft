@@ -1,0 +1,13 @@
+# exp-compliance-api - LOCAL (Anypoint Studio)
+http:
+  port: "8081"
+api:
+  id: "0"
+prc:
+  host: "localhost"
+  port: "8082"
+  protocol: "HTTP"
+  basePath: "/api"
+  timeoutMs: "600000"     # a catch-up run can take several minutes
+  retries: "2"
+  retryDelayMs: "2000"

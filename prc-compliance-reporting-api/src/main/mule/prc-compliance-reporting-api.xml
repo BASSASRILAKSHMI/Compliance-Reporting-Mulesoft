@@ -37,11 +37,13 @@
     <flow name="get:\runs:prc-compliance-reporting-api-config">
         <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/runs', query: attributes.queryParams }]" />
         <flow-ref name="sysdb-get" doc:name="GET /runs" />
+        <set-payload value="#[output application/json --- payload]" doc:name="JSON response" />
     </flow>
 
     <flow name="get:\runs\(runId):prc-compliance-reporting-api-config">
         <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/runs/' ++ attributes.uriParams.runId }]" />
         <flow-ref name="sysdb-get" doc:name="GET /runs/{runId}" />
+        <set-payload value="#[output application/json --- payload]" doc:name="JSON response" />
     </flow>
 
     <flow name="get:\late-flags:prc-compliance-reporting-api-config">
@@ -51,12 +53,14 @@
     <flow name="get:\archive:prc-compliance-reporting-api-config">
         <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/archive', query: attributes.queryParams }]" />
         <flow-ref name="sysdb-get" doc:name="GET /archive" />
+        <set-payload value="#[output application/json --- payload]" doc:name="JSON response" />
     </flow>
 
     <flow name="get:\archive\(runId)\(fileType):prc-compliance-reporting-api-config">
         <set-variable variableName="call" doc:name="call"
             value="#[output application/java --- { path: '/archive/' ++ attributes.uriParams.runId ++ '/' ++ attributes.uriParams.fileType }]" />
         <flow-ref name="sysdb-get" doc:name="GET /archive/{runId}/{fileType}" />
+        <set-payload value="#[output application/json --- payload]" doc:name="JSON response" />
     </flow>
 
     <flow name="post:\verify:application\json:prc-compliance-reporting-api-config">

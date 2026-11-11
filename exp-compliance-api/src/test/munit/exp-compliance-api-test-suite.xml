@@ -1,0 +1,107 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:munit="http://www.mulesoft.org/schema/mule/munit"
+      xmlns:munit-tools="http://www.mulesoft.org/schema/mule/munit-tools"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/munit http://www.mulesoft.org/schema/mule/munit/current/mule-munit.xsd
+        http://www.mulesoft.org/schema/mule/munit-tools http://www.mulesoft.org/schema/mule/munit-tools/current/mule-munit-tools.xsd">
+
+    <!-- env=test (config-test.yaml): link secret is the plain value "munit-secret".
+         Tokens below were signed with that secret, exactly as prc secureToken() does. -->
+    <munit:config name="exp-compliance-api-test-suite.xml" />
+
+    <munit:test name="download-with-valid-token" description="FR12 - a valid signed link returns the archived bytes as a file">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="GET prc" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload mediaType="application/java"
+                        value="#[{ runId: 'RUN-T1', fileType: 'SUBMISSION', fileName: 'ENT0091_STR_20261105_001.csv', checksum: 'abc', contentBase64: 'SGVsbG8=' }]" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <munit:set-event doc:name="Token in URI">
+                <munit:attributes value="#[{ uriParams: { token: 'RUN-T1.SUBMISSION.20991231235959.f8e3d628b0ddc51ef25966af09079238712174881ca5edb81f3e290941bdb0b6' } }]" />
+            </munit:set-event>
+            <flow-ref name="exp-secure-download" doc:name="exp-secure-download" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[output application/java --- read(payload, 'text/plain') as String]" is="#[MunitTools::equalTo('Hello')]" />
+            <munit-tools:assert-that expression="#[output application/java --- vars.outboundHeaders.'Content-Disposition' contains 'ENT0091_STR_20261105_001.csv']" is="#[MunitTools::equalTo(true)]" />
+            <munit-tools:assert-that expression="#[vars.fileRef.runId]" is="#[MunitTools::equalTo('RUN-T1')]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="download-with-tampered-token" description="A link whose run id was edited fails the signature check (403)" expectedErrorType="APP:FORBIDDEN">
+        <munit:execution>
+            <munit:set-event doc:name="Token in URI">
+                <munit:attributes value="#[{ uriParams: { token: 'RUN-T2.SUBMISSION.20991231235959.f8e3d628b0ddc51ef25966af09079238712174881ca5edb81f3e290941bdb0b6' } }]" />
+            </munit:set-event>
+            <flow-ref name="exp-secure-download" doc:name="exp-secure-download" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="download-with-malformed-token" description="Garbage token (403)" expectedErrorType="APP:FORBIDDEN">
+        <munit:execution>
+            <munit:set-event doc:name="Token in URI">
+                <munit:attributes value="#[{ uriParams: { token: 'not-a-token' } }]" />
+            </munit:set-event>
+            <flow-ref name="exp-secure-download" doc:name="exp-secure-download" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="download-with-expired-token" description="Correctly signed but expired link (410)" expectedErrorType="APP:LINK_EXPIRED">
+        <munit:execution>
+            <munit:set-event doc:name="Token in URI">
+                <munit:attributes value="#[{ uriParams: { token: 'RUN-T1.SUBMISSION.20200101000000.297f3e5222a50b52c63e690383e5be88742f64e5b4aa4f024f88194b67ac1874' } }]" />
+            </munit:set-event>
+            <flow-ref name="exp-secure-download" doc:name="exp-secure-download" />
+        </munit:execution>
+    </munit:test>
+
+    <munit:test name="trigger-run-forwards-officer" description="The officer's name is passed on as triggeredBy for the audit trail">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="SEND prc" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:payload value="#[[{ outcome: 'SUCCESS' }]]" mediaType="application/java" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <set-payload value="#[output application/java --- { mode: 'NEXT', requestedBy: 'officer1' }]" doc:name="Request" />
+            <flow-ref name="exp-trigger-run" doc:name="exp-trigger-run" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[vars.call.body.triggeredBy]" is="#[MunitTools::equalTo('officer1')]" />
+            <munit-tools:assert-that expression="#[output application/java --- payload[0].outcome]" is="#[MunitTools::equalTo('SUCCESS')]" />
+        </munit:validation>
+    </munit:test>
+
+    <munit:test name="health-degraded-when-process-down" description="Process API unreachable -> DEGRADED, never a 500">
+        <munit:behavior>
+            <munit-tools:mock-when processor="http:request">
+                <munit-tools:with-attributes>
+                    <munit-tools:with-attribute attributeName="doc:name" whereValue="GET prc /health" />
+                </munit-tools:with-attributes>
+                <munit-tools:then-return>
+                    <munit-tools:error typeId="HTTP:CONNECTIVITY" />
+                </munit-tools:then-return>
+            </munit-tools:mock-when>
+        </munit:behavior>
+        <munit:execution>
+            <flow-ref name="exp-health" doc:name="exp-health" />
+        </munit:execution>
+        <munit:validation>
+            <munit-tools:assert-that expression="#[output application/java --- payload.status]" is="#[MunitTools::equalTo('DEGRADED')]" />
+        </munit:validation>
+    </munit:test>
+</mule>

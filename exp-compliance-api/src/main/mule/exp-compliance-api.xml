@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:apikit="http://www.mulesoft.org/schema/mule/mule-apikit"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/mule-apikit http://www.mulesoft.org/schema/mule/mule-apikit/current/mule-apikit.xsd">
+
+    <flow name="exp-compliance-api-main" doc:name="exp-compliance-api-main">
+        <http:listener config-ref="exp_http_listener_config" path="/api/*" doc:name="Listener /api/*">
+            <http:response statusCode="#[vars.httpStatus default 200]">
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:response>
+            <http:error-response statusCode="#[vars.httpStatus default 500]">
+                <http:body>#[payload]</http:body>
+                <http:headers>#[vars.outboundHeaders default {}]</http:headers>
+            </http:error-response>
+        </http:listener>
+        <logger level="INFO" category="com.cbit.compliance.exp" doc:name="Log request"
+            message="#[output application/java --- 'exp-api ' ++ attributes.method ++ ' ' ++ attributes.requestPath ++ ' correlationId=' ++ correlationId]" />
+        <apikit:router config-ref="exp-compliance-api-config" doc:name="APIkit router" />
+        <error-handler ref="global-error-handler" />
+    </flow>
+
+    <flow name="get:\health:exp-compliance-api-config">
+        <flow-ref name="exp-health" doc:name="exp-health" />
+    </flow>
+
+    <flow name="post:\reports\runs:application\json:exp-compliance-api-config">
+        <flow-ref name="exp-trigger-run" doc:name="exp-trigger-run" />
+    </flow>
+
+    <flow name="get:\reports\runs:exp-compliance-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/runs', query: attributes.queryParams }]" />
+        <flow-ref name="prc-get" doc:name="prc-get" />
+        <flow-ref name="as-json" doc:name="as-json" />
+    </flow>
+
+    <flow name="get:\reports\runs\(runId):exp-compliance-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/runs/' ++ attributes.uriParams.runId }]" />
+        <flow-ref name="prc-get" doc:name="prc-get" />
+        <flow-ref name="as-json" doc:name="as-json" />
+    </flow>
+
+    <flow name="get:\reports\late-flags:exp-compliance-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/late-flags' }]" />
+        <flow-ref name="prc-get" doc:name="prc-get" />
+        <flow-ref name="as-json" doc:name="as-json" />
+    </flow>
+
+    <flow name="get:\reports\archive:exp-compliance-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/archive', query: attributes.queryParams }]" />
+        <flow-ref name="prc-get" doc:name="prc-get" />
+        <flow-ref name="as-json" doc:name="as-json" />
+    </flow>
+
+    <flow name="get:\reports\archive\(runId)\(fileType):exp-compliance-api-config">
+        <set-variable variableName="fileRef" doc:name="fileRef"
+            value="#[output application/java --- { runId: attributes.uriParams.runId, fileType: upper(attributes.uriParams.fileType) }]" />
+        <flow-ref name="exp-serve-archived-file" doc:name="exp-serve-archived-file" />
+    </flow>
+
+    <flow name="post:\reports\verify:application\json:exp-compliance-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { method: 'POST', path: '/verify', body: payload }]" />
+        <flow-ref name="prc-send" doc:name="prc-send" />
+        <flow-ref name="as-json" doc:name="as-json" />
+    </flow>
+
+    <flow name="get:\reports\chain\verify:exp-compliance-api-config">
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- { path: '/chain/verify' }]" />
+        <flow-ref name="prc-get" doc:name="prc-get" />
+        <flow-ref name="as-json" doc:name="as-json" />
+    </flow>
+
+    <flow name="get:\downloads\(token):exp-compliance-api-config">
+        <flow-ref name="exp-secure-download" doc:name="exp-secure-download" />
+    </flow>
+</mule>

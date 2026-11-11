@@ -1,0 +1,3 @@
+# MUnit only - plain value
+secureLink:
+  secret: "munit-secret"

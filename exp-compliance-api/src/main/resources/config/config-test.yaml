@@ -1,0 +1,13 @@
+# exp-compliance-api - MUnit (process API mocked)
+http:
+  port: "8091"
+api:
+  id: "0"
+prc:
+  host: "localhost"
+  port: "8082"
+  protocol: "HTTP"
+  basePath: "/api"
+  timeoutMs: "600000"     # a catch-up run can take several minutes
+  retries: "0"
+  retryDelayMs: "10"

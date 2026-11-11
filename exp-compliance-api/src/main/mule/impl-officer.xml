@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns="http://www.mulesoft.org/schema/mule/core"
+      xmlns:doc="http://www.mulesoft.org/schema/mule/documentation"
+      xmlns:http="http://www.mulesoft.org/schema/mule/http"
+      xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="
+        http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+        http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+        http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd">
+
+    <!-- ===================== client for the process API ===================== -->
+    <sub-flow name="prc-get" doc:name="prc-get">
+        <until-successful maxRetries="${prc.retries}" millisBetweenRetries="${prc.retryDelayMs}" doc:name="Retry GET">
+            <http:request config-ref="Prc_Reporting_API_Config" method="GET" path="#[vars.call.path]"
+                responseTimeout="${prc.timeoutMs}" doc:name="GET prc">
+                <http:query-params>#[output application/java --- vars.call.query default {}]</http:query-params>
+            </http:request>
+        </until-successful>
+        <set-payload value="#[output application/java --- payload]" doc:name="Response as Java" />
+    </sub-flow>
+
+    <!-- not retried: a report run must never be triggered twice by a retry -->
+    <sub-flow name="prc-send" doc:name="prc-send">
+        <http:request config-ref="Prc_Reporting_API_Config" method="#[vars.call.method]" path="#[vars.call.path]"
+            responseTimeout="${prc.timeoutMs}" doc:name="SEND prc">
+            <http:body>#[output application/json skipNullOn="everywhere" --- vars.call.body]</http:body>
+        </http:request>
+        <set-payload value="#[output application/java --- payload]" doc:name="Response as Java" />
+    </sub-flow>
+
+    <sub-flow name="as-json" doc:name="as-json">
+        <set-payload value="#[output application/json --- payload]" doc:name="JSON response" />
+    </sub-flow>
+
+    <!-- ===================== health of the whole chain ===================== -->
+    <sub-flow name="exp-health" doc:name="exp-health">
+        <try doc:name="Process API">
+            <set-variable variableName="call" value="#[output application/java --- { path: '/health' }]" doc:name="call" />
+            <http:request config-ref="Prc_Reporting_API_Config" method="GET" path="/health" responseTimeout="10000" doc:name="GET prc /health" />
+            <set-variable variableName="chain" value="#[output application/java --- payload]" doc:name="chain" />
+            <error-handler>
+                <on-error-continue type="ANY" doc:name="Process API down">
+                    <set-variable variableName="chain" value="#[output application/java --- { status: 'DOWN' }]" doc:name="DOWN" />
+                </on-error-continue>
+            </error-handler>
+        </try>
+        <set-payload doc:name="Health" value="#[output application/json --- {
+            status: if (vars.chain.status == 'UP') 'UP' else 'DEGRADED',
+            experienceApi: 'UP',
+            processApi: vars.chain.status default 'DOWN',
+            sysDb: vars.chain.sysDb default 'UNKNOWN',
+            sysNotification: vars.chain.sysNotification default 'UNKNOWN' }]" />
+    </sub-flow>
+
+    <!-- ===================== trigger a run ===================== -->
+    <sub-flow name="exp-trigger-run" doc:name="exp-trigger-run">
+        <logger level="INFO" category="com.cbit.compliance.exp.audit" doc:name="AUDIT officer action"
+            message="#[output application/java --- 'OFFICER_ACTION mode=' ++ (payload.mode default '') ++ ' by=' ++ (payload.requestedBy default '') ++ ' reportDate=' ++ ((payload.reportDate default '') as String) ++ ' originalRunId=' ++ (payload.originalRunId default '')]" />
+        <set-variable variableName="call" doc:name="call" value="#[output application/java --- {
+            method: 'POST', path: '/runs',
+            body: { mode: payload.mode, reportDate: payload.reportDate, originalRunId: payload.originalRunId, triggeredBy: payload.requestedBy } }]" />
+        <flow-ref name="prc-send" doc:name="prc-send" />
+        <flow-ref name="as-json" doc:name="as-json" />
+    </sub-flow>
+
+    <!-- ===================== secure download link (FR12) ===================== -->
+    <sub-flow name="exp-secure-download" doc:name="exp-secure-download">
+        <ee:transform doc:name="Verify signed token">
+            <ee:variables>
+                <ee:set-variable variableName="tokenCheck"><![CDATA[%dw 2.0
+import checkToken, nowIst from dwl::token
+output application/java
+---
+checkToken(attributes.uriParams.token as String, p('secure::secureLink.secret'), nowIst())]]></ee:set-variable>
+            </ee:variables>
+        </ee:transform>
+        <choice doc:name="Token valid?">
+            <when expression="#[vars.tokenCheck.status == 410]">
+                <logger level="WARN" category="com.cbit.compliance.exp.audit" doc:name="AUDIT expired link"
+                    message="#[output application/java --- 'DOWNLOAD_REJECTED reason=LINK_EXPIRED expiredAt=' ++ (vars.tokenCheck.expiredAt default '')]" />
+                <raise-error type="APP:LINK_EXPIRED" doc:name="410" description="This download link has expired. Ask the compliance team for a new link." />
+            </when>
+            <when expression="#[not vars.tokenCheck.valid]">
+                <logger level="WARN" category="com.cbit.compliance.exp.audit" doc:name="AUDIT bad link"
+                    message="#[output application/java --- 'DOWNLOAD_REJECTED reason=' ++ vars.tokenCheck.reason]" />
+                <raise-error type="APP:FORBIDDEN" doc:name="403" description="Invalid download link." />
+            </when>
+        </choice>
+        <set-variable variableName="fileRef" doc:name="fileRef"
+            value="#[output application/java --- { runId: vars.tokenCheck.runId, fileType: vars.tokenCheck.fileType }]" />
+        <logger level="INFO" category="com.cbit.compliance.exp.audit" doc:name="AUDIT download"
+            message="#[output application/java --- 'SECURE_DOWNLOAD runId=' ++ vars.fileRef.runId ++ ' fileType=' ++ vars.fileRef.fileType ++ ' linkExpires=' ++ vars.tokenCheck.expiresAt]" />
+        <flow-ref name="exp-serve-archived-file" doc:name="exp-serve-archived-file" />
+    </sub-flow>
+
+    <!-- archived bytes, exactly as issued, as a file download -->
+    <sub-flow name="exp-serve-archived-file" doc:name="exp-serve-archived-file">
+        <set-variable variableName="call" doc:name="call"
+            value="#[output application/java --- { path: '/archive/' ++ vars.fileRef.runId ++ '/' ++ vars.fileRef.fileType }]" />
+        <flow-ref name="prc-get" doc:name="prc-get" />
+        <set-variable variableName="outboundHeaders" doc:name="Download headers"
+            value="#[output application/java --- { 'Content-Disposition': 'attachment; filename=&quot;' ++ payload.fileName ++ '&quot;', 'X-Content-SHA256': payload.checksum }]" />
+        <ee:transform doc:name="Bytes">
+            <ee:message>
+                <ee:set-payload><![CDATA[%dw 2.0
+import fromBase64 from dw::core::Binaries
+output application/octet-stream
+---
+fromBase64(payload.contentBase64)]]></ee:set-payload>
+            </ee:message>
+        </ee:transform>
+    </sub-flow>
+</mule>

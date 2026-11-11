@@ -1,0 +1,4 @@
+# Encrypted with the Mule Secure Properties Tool (AES / CBC), same key as the other apps.
+# secureLink.secret must be the SAME plain value as in prc-compliance-reporting-api.
+secureLink:
+  secret: "![do5s5rM5JjzAG4UwftpMoahaKXTCtlxi3iSX0Li1xw4=]"

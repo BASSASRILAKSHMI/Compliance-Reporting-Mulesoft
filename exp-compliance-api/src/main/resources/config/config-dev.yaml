@@ -1,0 +1,13 @@
+# exp-compliance-api - DEV (CloudHub 2.0, Sandbox)
+http:
+  port: "8081"
+api:
+  id: "REPLACE_WITH_API_MANAGER_INSTANCE_ID"
+prc:
+  host: "REPLACE_WITH_PRC_CLOUDHUB_HOST"
+  port: "443"
+  protocol: "HTTPS"
+  basePath: "/api"
+  timeoutMs: "600000"     # a catch-up run can take several minutes
+  retries: "2"
+  retryDelayMs: "2000"

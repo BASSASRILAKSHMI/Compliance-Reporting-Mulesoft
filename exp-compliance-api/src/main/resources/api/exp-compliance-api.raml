@@ -1,0 +1,149 @@
+#%RAML 1.0
+title: exp-compliance-api
+version: v1
+description: |
+  Experience API for the Compliance Officer - the only public entry point of the
+  Regulatory Compliance Reporting solution. Protected in API Manager (client id
+  enforcement + rate limiting) except /downloads, whose links carry their own
+  signed, expiring token.
+mediaType: application/json
+baseUri: http://localhost:8081/api
+
+types:
+  Error:
+    properties:
+      errorCode: string
+      message: string
+      correlationId?: string
+
+  RunRequest:
+    properties:
+      mode:
+        enum: [NEXT, REVISION, REPRODUCE]
+      reportDate?: date-only
+      originalRunId?: string
+      requestedBy:
+        type: string
+        description: Officer name - recorded in the audit trail as user:<name>.
+
+  VerifyRequest:
+    properties:
+      fileName?: string
+      contentBase64: string
+
+traits:
+  errors:
+    responses:
+      400:
+        body: Error
+      404:
+        body: Error
+      409:
+        body: Error
+      503:
+        body: Error
+
+/health:
+  get:
+    description: Liveness of the whole chain (experience -> process -> system APIs).
+    responses:
+      200:
+        body: any
+
+/reports/runs:
+  post:
+    is: [errors]
+    description: Trigger the next report(s), a revision of a reported date, or a byte-identical reproduction.
+    body: RunRequest
+    responses:
+      200:
+        body: any[]
+  get:
+    is: [errors]
+    description: Audit trail of report runs, newest first.
+    queryParameters:
+      status:
+        type: string
+        required: false
+      reportDate:
+        type: date-only
+        required: false
+      limit:
+        type: integer
+        default: 30
+        required: false
+    responses:
+      200:
+        body: any[]
+
+/reports/runs/{runId}:
+  get:
+    is: [errors]
+    description: Full audit record of one run (who, when, period, counts, checksums, delivery, AI briefing).
+    responses:
+      200:
+        body: any
+
+/reports/late-flags:
+  get:
+    is: [errors]
+    description: Flags confirmed after their period was reported, with the business date to revise.
+    responses:
+      200:
+        body: any[]
+
+/reports/archive:
+  get:
+    is: [errors]
+    queryParameters:
+      fileName:
+        type: string
+        required: false
+      runId:
+        type: string
+        required: false
+    responses:
+      200:
+        body: any[]
+
+/reports/archive/{runId}/{fileType}:
+  get:
+    is: [errors]
+    description: Downloads the archived file exactly as issued (submission CSV or summary HTML).
+    responses:
+      200:
+        body:
+          application/octet-stream:
+            type: file
+
+/reports/verify:
+  post:
+    is: [errors]
+    description: Checks whether a file is byte-for-byte a report that was issued.
+    body: VerifyRequest
+    responses:
+      200:
+        body: any
+
+/reports/chain/verify:
+  get:
+    is: [errors]
+    description: Re-hashes every archived report and verifies the tamper-evident hash chain.
+    responses:
+      200:
+        body: any
+
+/downloads/{token}:
+  get:
+    description: |
+      Secure download link sent by email when a report is too large to attach (FR12).
+      The token is signed (HMAC-SHA256) and expires; no other credential is needed.
+    responses:
+      200:
+        body:
+          application/octet-stream:
+            type: file
+      403:
+        body: Error
+      410:
+        body: Error
