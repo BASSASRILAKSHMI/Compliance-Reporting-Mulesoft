@@ -50,10 +50,10 @@ deviation:
 
 # ---- files (outside the Git repo) ----
 file:
-  workingDir: "/tmp/compliance-files"
-  outputDir: "output"
-  archiveDir: "archive"
-  reproduceDir: "reproduce"
+  workingDir: "/tmp"                 # always exists on CloudHub
+  outputDir: "compliance/output"
+  archiveDir: "compliance/archive"
+  reproduceDir: "compliance/reproduce"
 
 # ---- FR12 delivery ----
 email:
@@ -67,5 +67,5 @@ ai:
   enabled: "true"
   host: "api.groq.com"
   path: "/openai/v1/chat/completions"
-  model: "llama-3.3-70b-versatile"
+  model: "openai/gpt-oss-120b"
   timeoutMs: "15000"

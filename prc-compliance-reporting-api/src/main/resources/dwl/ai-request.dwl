@@ -22,7 +22,9 @@ var facts = {
 {
   model: p('ai.model'),
   temperature: 0.2,
-  max_tokens: 220,
+  // gpt-oss is a reasoning model: keep reasoning short and leave room for the answer
+  reasoning_effort: "low",
+  max_tokens: 1024,
   messages: [
     {
       role: "system",

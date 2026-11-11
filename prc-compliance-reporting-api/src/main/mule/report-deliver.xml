@@ -100,8 +100,10 @@ var pct     = deviationPct(vars.ctx.recordCount, recent)
 
         <!-- advisory AI briefing: aggregates only, never part of the submission, never blocks the run -->
         <set-variable variableName="aiSummary" value="#[output application/java --- null]" doc:name="aiSummary = null" />
+        <logger level="INFO" category="com.cbit.compliance.prc" doc:name="AI_DIAG start"
+            message="#[output application/java --- 'AI_DIAG start run=' ++ (vars.runId default '') ++ ' enabled=' ++ (p('ai.enabled') default 'MISSING') ++ ' model=' ++ (p('ai.model') default 'MISSING') ++ ' keyLength=' ++ (sizeOf(p('secure::ai.apiKey') default '') as String)]" />
         <choice doc:name="AI enabled?">
-            <when expression="#[p('ai.enabled') == 'true']">
+            <when expression="#[output application/java --- lower(trim((p('ai.enabled') default '') as String)) == 'true']">
                 <try doc:name="Best-effort AI">
                     <ee:transform doc:name="AI request">
                         <ee:variables>
@@ -115,14 +117,20 @@ var pct     = deviationPct(vars.ctx.recordCount, recent)
                     </http:request>
                     <set-variable variableName="aiSummary" doc:name="aiSummary"
                         value="#[output application/java --- trim((payload.choices[0].message.content default '') as String)]" />
+                    <logger level="INFO" category="com.cbit.compliance.prc" doc:name="AI_DIAG ok"
+                        message="#[output application/java --- 'AI_DIAG ok run=' ++ (vars.runId default '') ++ ' chars=' ++ (sizeOf(vars.aiSummary default '') as String)]" />
                     <error-handler>
                         <on-error-continue type="ANY" doc:name="Continue without AI">
                             <logger level="WARN" category="com.cbit.compliance.prc" doc:name="AI unavailable"
-                                message="#[output application/java --- 'AI briefing skipped for ' ++ vars.runId ++ ': ' ++ (error.description default '')]" />
+                                message="#[output application/java --- 'AI_DIAG failed run=' ++ (vars.runId default '') ++ ' type=' ++ ((error.errorType.namespace default '') ++ ':' ++ (error.errorType.identifier default '')) ++ ' status=' ++ ((error.errorMessage.attributes.statusCode default '') as String) ++ ' reason=' ++ (error.description default '')]" />
                         </on-error-continue>
                     </error-handler>
                 </try>
             </when>
+            <otherwise>
+                <logger level="WARN" category="com.cbit.compliance.prc" doc:name="AI_DIAG disabled"
+                    message="#[output application/java --- 'AI_DIAG disabled run=' ++ (vars.runId default '') ++ ' (ai.enabled is not true)']" />
+            </otherwise>
         </choice>
 
         <set-variable variableName="call" doc:name="call patch" value="#[output application/java --- { method: 'PATCH', path: '/runs/' ++ vars.runId, body: {
