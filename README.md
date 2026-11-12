@@ -9,6 +9,10 @@ with full audit, no gaps, no overlaps and byte-identical regeneration.
 
 ## Architecture (API-led)
 
+![API-led architecture](docs/architecture/api-led-architecture.png)
+
+Detailed view: [docs/architecture/detailed-architecture.png](docs/architecture/detailed-architecture.png)
+
 ```
  Officer / Postman / AI agent (MCP)
               │

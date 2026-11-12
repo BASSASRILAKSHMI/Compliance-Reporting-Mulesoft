@@ -39,6 +39,14 @@ expiring download links**, **missed-schedule catch-up alert**, **API Manager gov
 
 ## 3. Architecture (API-led connectivity)
 
+### API-led architecture
+![API-led architecture](architecture/api-led-architecture.png)
+
+### Detailed architecture
+![Detailed architecture](architecture/detailed-architecture.png)
+
+### Layer summary
+
 ```mermaid
 flowchart TB
     officer["Compliance Officer / Postman"]
