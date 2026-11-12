@@ -207,6 +207,17 @@ T|3|2378500.00|3|2026-11-11T14:53:11+05:30|c10b8193bb5068edd466fa8c1e64fcee8e98e
 
 MUnit suites (DB, File, SMTP and HTTP mocked) exist for all four applications.
 
+### Screenshots
+
+| Evidence | |
+|---|---|
+| Rate limiting – 20 × 200 then 429 | ![](evidence/01-rate-limit-429.png) |
+| Nightly scheduler on CloudHub (`triggeredBy: SCHEDULER`, AI briefing) | ![](evidence/02-scheduler-run-cloudhub.png) |
+| Report email to the Compliance Officer | ![](evidence/03-email-report.png) |
+| Alerts – missed schedule, volume deviation, run failure | ![](evidence/04-inbox-alerts.png) |
+| Immutable archive – UPDATE rejected by DB grants | ![](evidence/05-archive-immutable.png) |
+| Four apps running on CloudHub 2.0 (Mule 4.13.2) | ![](evidence/06-runtime-manager.png) |
+
 ## 11. Deployment
 
 * Four Mule deployable archives, `groupId` = organisation id, deployed to **CloudHub 2.0 Shared Space**,
