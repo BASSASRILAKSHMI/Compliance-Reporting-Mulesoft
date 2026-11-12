@@ -1,0 +1,296 @@
+{
+  "info": {
+    "name": "Regulatory Compliance Reporting \u2013 Demo",
+    "description": "Cognizant NPN MuleSoft Hackathon \u00b7 Use Case 12. Run the requests in order. The experience API is rate-limited to 20 requests/minute.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "1. Health \u2013 all four layers",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{EXP}}/health",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "exp \u2192 prc \u2192 sys-db + sys-notification \u2192 TiDB. Expect every layer UP."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('All layers UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Audit trail \u2013 issued reports",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{EXP}}/reports/runs?status=SUCCESS",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "reports",
+            "runs"
+          ],
+          "query": [
+            {
+              "key": "status",
+              "value": "SUCCESS"
+            }
+          ]
+        },
+        "description": "Newest first. Top entries: triggeredBy SCHEDULER (nightly job on CloudHub), NIL reports, aiSummary, checksums, chain hash."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Runs returned', () => pm.expect(pm.response.json().length).to.be.above(0));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Download archived report (5 Nov sample)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{EXP}}/reports/archive/RUN-20261111-145311-52b680/SUBMISSION",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "reports",
+            "archive",
+            "RUN-20261111-145311-52b680",
+            "SUBMISSION"
+          ]
+        },
+        "description": "Prescribed H/D/T file from the immutable archive. Check the X-Content-SHA256 response header (e999e20b\u2026)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Checksum header present', () => pm.expect(pm.response.headers.get('X-Content-SHA256')).to.include('e999e20b'));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. REPRODUCE \u2013 byte-identical regeneration",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{EXP}}/reports/runs",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "reports",
+            "runs"
+          ]
+        },
+        "description": "Rebuilds the 5 Nov report from the DB and compares SHA-256 with the issued file. Expect identical: true.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"mode\": \"REPRODUCE\",\n  \"originalRunId\": \"RUN-20261111-145311-52b680\",\n  \"requestedBy\": \"reviewer\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Identical', () => pm.expect(pm.response.json()[0].identical).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "5. REVISION \u2013 re-issue a day (seq 002\u2026)",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": {
+          "raw": "{{EXP}}/reports/runs",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "reports",
+            "runs"
+          ]
+        },
+        "description": "Re-issues 8 Nov with the next sequence number, linked to the original. Change reportDate for each new demo. Email + AI briefing arrive in the inbox.",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"mode\": \"REVISION\",\n  \"reportDate\": \"2026-11-08\",\n  \"requestedBy\": \"reviewer\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        }
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Revision issued', () => pm.expect(pm.response.json()[0].isRevision).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "6. Hash chain verification",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{EXP}}/reports/chain/verify",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "reports",
+            "chain",
+            "verify"
+          ]
+        },
+        "description": "Re-hashes every archived file and walks the chain from GENESIS. Expect valid: true."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Chain valid', () => pm.expect(pm.response.json().valid).to.eql(true));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "7. Tampered download link \u2192 403",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{EXP}}/downloads/RUN-X.SUBMISSION.20991231235959.fakesignature",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "downloads",
+            "RUN-X.SUBMISSION.20991231235959.fakesignature"
+          ]
+        },
+        "description": "HMAC-signed expiring links. An edited link is rejected with 403 INVALID_LINK (expired \u2192 410)."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Rejected 403', () => pm.response.to.have.status(403));"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "8. Failed runs \u2013 failure safety",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{EXP}}/reports/runs?status=FAILED",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "reports",
+            "runs"
+          ],
+          "query": [
+            {
+              "key": "status",
+              "value": "FAILED"
+            }
+          ]
+        },
+        "description": "Every failure recorded with its reason; bookmark not advanced. First entry: two schedulers fired at once, second rejected by the unique period key."
+      }
+    },
+    {
+      "name": "9. Late flags (sentinel)",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{EXP}}/reports/late-flags",
+          "host": [
+            "{{EXP}}"
+          ],
+          "path": [
+            "reports",
+            "late-flags"
+          ]
+        },
+        "description": "Flags that arrived after their day was already reported \u2013 the trigger for a revision."
+      }
+    }
+  ],
+  "variable": [
+    {
+      "key": "EXP",
+      "value": "https://cbit-exp-app-z0s4lp.5sc6y6-1.usa-e2.cloudhub.io/api"
+    }
+  ]
+}
