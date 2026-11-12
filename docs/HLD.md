@@ -204,6 +204,7 @@ T|3|2378500.00|3|2026-11-11T14:53:11+05:30|c10b8193bb5068edd466fa8c1e64fcee8e98e
 | AI model retired upstream | Detected via `AI_DIAG` (404), switched model; reports never blocked |
 | Rate limiting | 20 × 200, then 429 Too Many Requests |
 | Failure handling | Failed runs recorded with error code/message; bookmark not advanced; next trigger retried |
+| Two schedulers at once (production, 12 Nov 21:30) | During a rolling update two prc replicas fired together. One issued 11 Nov; the other was rejected at finalize by the unique period constraint (`uk_report_period`) and recorded as FAILED – no duplicate sequence, bookmark and hash chain intact |
 
 MUnit suites (DB, File, SMTP and HTTP mocked) exist for all four applications.
 
@@ -227,6 +228,11 @@ MUnit suites (DB, File, SMTP and HTTP mocked) exist for all four applications.
 * Each app is registered in **API Manager** through autodiscovery (`api.id` + environment client credentials).
 
 ## 12. Known limitations and next steps
+
+* **Duplicate email under concurrent runs.** In the two-scheduler event above the database stayed consistent, but the
+  losing run had already emailed its copy before finalize. Fix: send the email only after a successful finalize
+  (or claim the period in the DB before building), and use update strategy *Recreate* so only one replica runs the
+  scheduler – now configured.
 
 * Client ID Enforcement on `/api/reports/*` is prepared but optional for the demo; download links stay public
   because they carry their own HMAC signature and expiry.
